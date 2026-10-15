@@ -95,7 +95,7 @@ PSCODE=$(sed -n 's/^CODE //p' "$T/fn.out")
 echo "== 4. join.ps1 (no arguments' real flow, against a local web server instead of GitHub)"
 "$HR" export-config --out "$T/pub0" >/dev/null 2>&1 || true
 PUB="$T/pub"; mkdir -p "$PUB/installer" "$PUB/config"
-cp "$ROOT"/installer/mac-installer.sh.tmpl "$ROOT"/installer/helper.js "$ROOT"/installer/launcher.js "$ROOT"/installer/win-installer.ps1.tmpl "$ROOT"/installer/win-helper.ps1 "$PUB/installer/"
+cp "$ROOT"/installer/* "$PUB/installer/"
 "$HR" export-config --out "$PUB" >/dev/null
 grep -q "win-installer.ps1.tmpl" "$PUB/MANIFEST.sha256" && grep -q "win-helper.ps1" "$PUB/MANIFEST.sha256" && pass "manifest lists the Windows files"
 PORT=48765; ( cd "$PUB" && exec python3 -m http.server $PORT --bind 127.0.0.1 >/dev/null 2>&1 ) & pids+=($!)

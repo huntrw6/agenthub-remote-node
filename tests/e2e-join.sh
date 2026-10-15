@@ -17,7 +17,7 @@ sleep 1
 
 # --- public config exactly as it would be published
 PUB="$T/pub"; mkdir -p "$PUB/installer" "$PUB/config"
-cp "$ROOT"/installer/mac-installer.sh.tmpl "$ROOT"/installer/helper.js "$ROOT"/installer/launcher.js "$ROOT"/installer/win-installer.ps1.tmpl "$ROOT"/installer/win-helper.ps1 "$PUB/installer/"
+cp "$ROOT"/installer/* "$PUB/installer/"
 "$HR" export-config --out "$PUB" >/dev/null
 [ -s "$PUB/config/relay.env" ] && [ -s "$PUB/MANIFEST.sha256" ] && pass "export-config wrote public settings + manifest"
 grep -q "hermes_ed25519\b" "$PUB/config/relay.env" && failx "operator private key leaked into public config"

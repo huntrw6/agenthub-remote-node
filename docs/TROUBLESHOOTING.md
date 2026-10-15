@@ -34,6 +34,18 @@ A LaunchAgent starts it again. Take a `screenshot` to see a pop-up.
 
 The helper runs only while a person is signed in. It cannot capture a locked screen or the sign-in screen. Run `hermes-remote doctor <node>`: the line `helper alive` must show a status that is less than 120 seconds old.
 
+## A Linux computer shows `offline`
+
+1. Run `hermes-remote diag <node>`. It shows the state of the socket and the tunnel service, the end of the tunnel log, the desktop type and the SELinux mode.
+2. On the computer: `systemctl status agenthub-remote-tunnel agenthub-remote-sshd.socket` and `sudo tail /etc/agenthub-remote/tunnel.log`.
+3. A computer that is asleep or off is offline. A laptop suspends on battery. A disk with LUKS encryption waits for its password after a restart.
+4. With SELinux on, look for denials: `sudo ausearch -m avc -ts recent`.
+5. Run the installer again. It is safe.
+
+## `screenshot` fails on Linux
+
+The helper runs only while a person is logged in to the desktop. `doctor` shows `helper alive`. If it shows `MISSING`, log in to the desktop. On GNOME with Wayland a pop-up can ask to allow the screenshot. On a locked screen, no tool can capture.
+
 ## The join link says "closed"
 
 Registration is off. Run `hermes-remote join-link on`. If it stops with "published settings are out of date", run `export-config`, commit, push, and try again.

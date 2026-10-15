@@ -265,6 +265,7 @@ def relay_hostkey() -> str:
 # ------------------------------------------------------------- new / enroll -
 TYPES = {"intel": "Intel", "silicon": "AppleSilicon"}
 WIN_TYPES = {"win64": "x64", "win32": "x32"}  # Windows 64-bit / 32-bit installers
+LINUX_TYPES = {"fedora": "Fedora"}  # Linux distribution families (one installer per family; the CPU is detected)
 MAX_PENDING = 10
 JOIN_NEW_PER_IP, JOIN_NEW_WINDOW = 3, 3600  # new registrations allowed per source IP per hour
 
@@ -290,6 +291,16 @@ def cmd_new_installer(a):
     st.setdefault("groups", {})[a.type] = {"enroll_pub": enroll_pub, "expires": expires, "sudo": a.sudo, "created": now()}
     save(st)
     write_relay_files(st)
+    if a.type in LINUX_TYPES:
+        out = HOME / "installers"
+        out.mkdir(mode=0o700, exist_ok=True)
+        path = out / f"AgentHub-Remote-{LINUX_TYPES[a.type]}.sh"
+        path.write_bytes(build_linux_installer(
+            a.type, a.owner or st["relay"].get("owner") or "the support person", st, hostkey, hermes_pub, enroll_priv, expires, "", a.sudo))
+        os.chmod(path, 0o700)
+        print(f"installer: {path}")
+        print(f"reusable for any {LINUX_TYPES[a.type]}-family Linux PC until {expires}; it can only register a PENDING machine, nothing works until you approve its code.")
+        return
     if a.type in WIN_TYPES:
         out = HOME / "installers"
         out.mkdir(mode=0o700, exist_ok=True)
@@ -347,6 +358,24 @@ def fill_windows_template(tmpl: str, subs: dict) -> str:
     return out
 
 
+def sh_config_block(subs: dict) -> str:
+    return "".join(f"{k}={shlex.quote(str(v))}\n" for k, v in subs.items())
+
+
+def build_linux_installer(ltype: str, owner: str, st: dict, hostkey: str, hermes_pub: str, enroll_priv: str, expires: str, join_mode: str, sudo: str) -> bytes:
+    """One shell script: the template with the settings block filled in (no placeholders inside the code)."""
+    subs = {
+        "TYPE": ltype, "OWNER": owner, "GENERATED": now(), "EXPIRES": expires, "RELAY_HOST": st["relay"]["host"],
+        "RELAY_PORT": st["relay"]["port"], "RELAY_USER": st["relay"]["user"], "RELAY_HOSTKEY": hostkey,
+        "HERMES_PUB": hermes_pub, "SUDO_MODE": sudo, "JOIN_MODE": join_mode, "ENROLL_KEY_B64": base64.b64encode(enroll_priv.encode()).decode(),
+        "HELPER_B64": base64.b64encode((HERE / "installer" / "linux-helper.sh").read_bytes()).decode(),
+    }
+    tmpl = (HERE / "installer" / "linux-installer.sh.tmpl").read_text()
+    if tmpl.count("#@@CONFIG@@\n") != 1:
+        raise ValueError("template must contain the settings marker once")
+    return tmpl.replace("#@@CONFIG@@\n", sh_config_block(subs)).encode()
+
+
 def build_windows_installer(wtype: str, owner: str, st: dict, hostkey: str, hermes_pub: str, enroll_priv: str, expires: str, join_mode: str) -> bytes:
     """One self-extracting .cmd: a few batch lines that unpack and run the PowerShell installer."""
     subs = {
@@ -398,8 +427,13 @@ def cmd_enroll_handler(a):
         signal.alarm(10)
         d = json.loads(sys.stdin.read(8192))
         tp, hk, user = d.get("tunnel_pub", ""), d.get("mac_hostkey", ""), d.get("mac_user", "")
-        win = a.name in WIN_TYPES or (join_mode and str(d.get("platform", "")) == "windows")
-        if win and str(d.get("type", a.name)) not in WIN_TYPES:
+        plat = "macos"
+        if a.name in WIN_TYPES or (join_mode and str(d.get("platform", "")) == "windows"):
+            plat = "windows"
+        elif a.name in LINUX_TYPES or (join_mode and str(d.get("platform", "")) == "linux"):
+            plat = "linux"
+        win = plat == "windows"
+        if plat != "macos" and str(d.get("type", a.name)) not in (WIN_TYPES if win else LINUX_TYPES):
             raise ValueError("invalid payload")
         if not (PUB_RE.match(tp) and PUB_RE.match(hk) and (WIN_USER_RE if win else USER_RE).match(user)):
             raise ValueError("invalid payload")
@@ -428,7 +462,7 @@ def cmd_enroll_handler(a):
                 sudo = jrec["sudo"]
             else:  # known machine re-running: keep what it already has, even after the window closed
                 sudo = st["nodes"][same[0]].get("sudo", "yes")
-            ntype = str(d["type"]) if win else ("intel" if str(d.get("arch", "")) == "x86_64" else "silicon")
+            ntype = str(d["type"]) if plat != "macos" else ("intel" if str(d.get("arch", "")) == "x86_64" else "silicon")
         else:
             sudo, ntype = g["sudo"], a.name
         if same:
@@ -444,7 +478,7 @@ def cmd_enroll_handler(a):
             st["nodes"][name] = {"id": nid, "ssh_port": SSH_PORT_BASE + nid, "vnc_port": VNC_PORT_BASE + nid}
         n = st["nodes"][name]
         n.update(
-            state="pending", platform="windows" if win else "macos", type=ntype, sudo=sudo, tunnel_pub=tp, mac_hostkey=hk,
+            state="pending", platform=plat, type=ntype, sudo=sudo, tunnel_pub=tp, mac_hostkey=hk,
             mac_user=user, enrolled=now(), code=code_for(tp, hk),
             info={k: str(d.get(k, ""))[:80] for k in ("hostname", "arch", "os")},
         )
@@ -513,7 +547,7 @@ def cmd_new_join(a):
     save(st)
     write_relay_files(st)
     print(f"setup window open until {exp}  (sudo={a.sudo}; `hermes-remote close-join` ends it early)")
-    print("give the person this command to paste into Terminal on the Mac:\n")
+    print("give the person this command to paste into Terminal on a Mac or a Fedora-family Linux computer:\n")
     print(f"  curl -fsSL {base}/join.sh | bash -s -- {base}\n")
     print("or this one, to paste into PowerShell on a Windows PC:\n")
     print(f"  [Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12; $env:HR_JOIN_BASE='{base}'; irm {base}/join.ps1 | iex\n")
@@ -552,7 +586,7 @@ def cmd_join_link(a):
         save(st)
         write_relay_files(st)
         print(f"join link ON (sudo={a.sudo}). Anyone running the setup command can register a PENDING computer.")
-        print("Mac (Terminal):        curl -fsSL https://raw.githubusercontent.com/<you>/<repo>/main/join.sh | bash")
+        print("Mac or Linux (Terminal): curl -fsSL https://raw.githubusercontent.com/<you>/<repo>/main/join.sh | bash")
         print("Windows (PowerShell):  [Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12; irm https://raw.githubusercontent.com/<you>/<repo>/main/join.ps1 | iex")
         print("nothing works until you run: hermes-remote approve <name> <code>  (the code is shown on that Mac)")
     elif a.mode == "off":
@@ -600,7 +634,7 @@ def cmd_export_config(a):
     text = "# PUBLIC client settings for join.sh. JOIN_KEY_B64 is deliberately public: it can only submit a registration, only while the owner has the join link on, and nothing works until the owner approves the code the Mac shows.\n"
     text += "".join(f"{k}={shlex.quote(v)}\n" for k, v in vals.items())
     (out / "config" / "relay.env").write_text(text)
-    files = ["installer/mac-installer.sh.tmpl", "installer/helper.js", "installer/launcher.js", "installer/win-installer.ps1.tmpl", "installer/win-helper.ps1", "config/relay.env"]
+    files = ["installer/mac-installer.sh.tmpl", "installer/helper.js", "installer/launcher.js", "installer/win-installer.ps1.tmpl", "installer/win-helper.ps1", "installer/linux-installer.sh.tmpl", "installer/linux-helper.sh", "config/relay.env"]
     (out / "MANIFEST.sha256").write_text("".join(f"{hashlib.sha256((out / f).read_bytes()).hexdigest()}  {f}\n" for f in files))
     print(f"wrote {out}/config/relay.env and MANIFEST.sha256; commit and push, then run join-link on")
 
@@ -654,6 +688,18 @@ def make_zips() -> dict:
             zf.writestr(zipfile.ZipInfo(src.name, date_time=dt.datetime.now().timetuple()[:6]), src.read_bytes(), zipfile.ZIP_DEFLATED)
         os.chmod(z, 0o600)
         res["Windows " + label] = (z, hashlib.sha256(z.read_bytes()).hexdigest())
+    for t, label in LINUX_TYPES.items():
+        src = out / f"AgentHub-Remote-{label}.sh"
+        if not src.exists():
+            continue
+        z = out / f"AgentHub-Remote-{label}.zip"
+        info = zipfile.ZipInfo(src.name, date_time=dt.datetime.now().timetuple()[:6])
+        info.external_attr = (0o100755 << 16)
+        info.compress_type = zipfile.ZIP_DEFLATED
+        with zipfile.ZipFile(z, "w") as zf:
+            zf.writestr(info, src.read_bytes())
+        os.chmod(z, 0o600)
+        res["Linux " + label] = (z, hashlib.sha256(z.read_bytes()).hexdigest())
     return res
 
 
@@ -664,7 +710,7 @@ def cmd_serve(a):
     import threading
     zips = make_zips()
     if not zips:
-        die("no installers yet: run new-installer intel|silicon")
+        die("no installers yet: run new-installer intel|silicon|win64|win32|fedora")
     token = secrets.token_urlsafe(16)
     names = {z.name: z for z, _ in zips.values()}
     rows = "".join(
@@ -674,10 +720,10 @@ def cmd_serve(a):
     page = (
         "<!doctype html><meta charset=utf-8><meta name=viewport content='width=device-width'>"
         "<title>AgentHub Remote installers</title><body style='font:16px system-ui;max-width:42rem;margin:3rem auto;padding:0 1rem'>"
-        "<h1>AgentHub Remote installers</h1><p>Pick the one matching the Mac "
-        "(Mac: menu &gt; About This Mac, <b>Intel</b> or <b>Apple M-chip</b>. Windows: <b>x64</b> for almost every PC; <b>x32</b> only for old 32-bit Windows).</p>"
+        "<h1>AgentHub Remote installers</h1><p>Pick the one matching the computer "
+        "(Mac: menu &gt; About This Mac, <b>Intel</b> or <b>Apple M-chip</b>. Windows: <b>x64</b> for almost every PC; <b>x32</b> only for old 32-bit Windows. Linux: Fedora, RHEL, Rocky, AlmaLinux).</p>"
         f"<ul>{rows}</ul><ol><li>Double-click the downloaded zip to unzip it.</li>"
-        "<li>Mac: <b>right-click</b> the .command file and choose <b>Open</b>, then Open again. Windows: double-click the .cmd file; if Windows says it protected your PC, choose <b>More info</b>, then <b>Run anyway</b>.</li>"
+        "<li>Mac: <b>right-click</b> the .command file and choose <b>Open</b>, then Open again. Windows: double-click the .cmd file; if Windows says it protected your PC, choose <b>More info</b>, then <b>Run anyway</b>. Linux: open a terminal in the folder and run <b>bash AgentHub-Remote-Fedora.sh</b>.</li>"
         "<li>Follow the steps; read the final code to the person who sent you here.</li></ol></body>"
     ).encode()
     prefix = f"/{token}/"
@@ -852,6 +898,8 @@ def app_job(name: str, cmd: str, timeout: int = 60) -> tuple[int, str]:
     n = node(name)
     if is_win(n):
         return win_app_job(n, cmd, timeout)
+    if n.get("platform") == "linux":
+        return lin_app_job(n, cmd, timeout)
     jid = secrets_hex(8)
     job = json.dumps({"id": jid, "ts": int(time.time()), "cmd": cmd})
     with tempfile.TemporaryDirectory() as td:
@@ -874,6 +922,36 @@ def app_job(name: str, cmd: str, timeout: int = 60) -> tuple[int, str]:
             o = json.loads(r.stdout)
             return o["rc"], base64.b64decode(o["out"]).decode(errors="replace")
     die("the helper app did not answer (not running, or the Mac is asleep/locked out)")
+
+
+LIN_JOBS = '"$HOME/.local/share/agenthub-remote/ipc/jobs"'
+
+
+def lin_app_job(n: dict, cmd: str, timeout: int) -> tuple[int, str]:
+    """Run a shell snippet inside the Linux helper, in the signed-in user's desktop session (signed job)."""
+    import time
+    jid = secrets_hex(8)
+    job = f"id={jid}\nts={int(time.time())}\ncmd={base64.b64encode(cmd.encode()).decode()}\n"
+    with tempfile.TemporaryDirectory() as td:
+        jf = Path(td) / "job"
+        jf.write_text(job)
+        r = run(["ssh-keygen", "-q", "-Y", "sign", "-f", str(KEYS / "hermes_ed25519"), "-n", "hermes-remote-job", str(jf)])
+        if r.returncode:
+            die("signing failed: " + r.stderr.strip())
+        sig = (Path(td) / "job.sig").read_text()
+    d = LIN_JOBS
+    r = subprocess.run(ssh_base(n) + [f"cat > {d}/{jid}.job.tmp && mv {d}/{jid}.job.tmp {d}/{jid}.job"], input=job, text=True, capture_output=True)
+    if r.returncode:
+        die("could not queue job (is the helper installed?): " + r.stderr.strip()[:200])
+    subprocess.run(ssh_base(n) + [f"cat > {d}/{jid}.sig"], input=sig, text=True, capture_output=True)
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        time.sleep(1.5)
+        r = subprocess.run(ssh_base(n) + [f"cat {d}/{jid}.out 2>/dev/null && rm -f {d}/{jid}.out"], text=True, capture_output=True)
+        if r.returncode == 0 and r.stdout.strip():
+            o = json.loads(r.stdout)
+            return o["rc"], base64.b64decode(o["out"]).decode(errors="replace")
+    die("the helper did not answer (nobody is signed in to the desktop, the computer is asleep, or the helper is not running)")
 
 
 WIN_BASE = "$env:ProgramData/AgentHubRemote"  # forward slashes work in PowerShell on Windows
@@ -938,6 +1016,8 @@ def cmd_screenshot(a):
     dest = out / f"{a.name}-{dt.datetime.now().strftime('%Y%m%d-%H%M%S')}.png"
     if is_win(node(a.name)):
         rc, o = app_job(a.name, WIN_SHOT, 60)
+    elif node(a.name).get("platform") == "linux":
+        rc, o = app_job(a.name, LIN_SHOT, 60)
     else:
         rc, o = app_job(a.name, 't=$(mktemp /tmp/hr.XXXXXX); /usr/sbin/screencapture -x -t png "$t" && /usr/bin/base64 < "$t"; rm -f "$t"', 60)
     try:
@@ -945,7 +1025,7 @@ def cmd_screenshot(a):
     except Exception:  # noqa: BLE001
         data = b""
     if rc or not data.startswith(b"\x89PNG"):
-        die("screenshot failed: " + o.strip()[:300] + (" (is someone signed in and is the screen unlocked? run doctor)" if is_win(node(a.name)) else " (Screen Recording allowed for the helper? run doctor)"))
+        die("screenshot failed: " + o.strip()[:300] + (" (is someone signed in and is the screen unlocked? run doctor)" if node(a.name).get("platform") in ("windows", "linux") else " (Screen Recording allowed for the helper? run doctor)"))
     dest.write_bytes(data)
     print(dest)
 
@@ -979,14 +1059,51 @@ def cmd_push(a):
 
 def cmd_vnc(a):
     n = node(a.name)
-    if is_win(n):
-        die("Windows nodes have no VNC tunnel. Use: screenshot <node>, or run/gui commands.")
+    if n.get("platform") in ("windows", "linux"):
+        die("Only Macs have a VNC tunnel. Use: screenshot <node>, or run/gui commands.")
     print(f"1) tunnel (from a machine that can reach this host): ssh -L 5901:127.0.0.1:{n['vnc_port']} {load()['relay']['user']}@<this-host>")
     print("2) then open vnc://127.0.0.1:5901 and sign in with the Mac account password.")
 
 
 # Plain-SSH checks: NOTHING here may touch a privacy-protected resource (that would raise a macOS
 # prompt attributed to sshd-keygen-wrapper). Permission probes run inside the helper app instead.
+LIN_SHOT = r"""
+d=$(mktemp -d) || exit 1; f="$d/s.png"; used=""
+try() { [ -z "$used" ] && command -v "$1" >/dev/null 2>&1 || return 0; shift; "$@" >/dev/null 2>&1; if [ -s "$f" ] && [ "$(head -c4 "$f" | tail -c3)" = PNG ]; then used=1; fi; }
+try grim grim "$f"
+try gnome-screenshot gnome-screenshot -f "$f"
+try spectacle spectacle -b -n -f -o "$f"
+try scrot scrot -o "$f"
+try import import -window root "$f"
+if [ -n "$used" ]; then base64 -w0 "$f"; rc=0; else echo "no working screenshot tool in this session (session=${XDG_SESSION_TYPE:-?} desktop=${XDG_CURRENT_DESKTOP:-?})"; rc=1; fi
+rm -rf "$d"; exit $rc
+"""
+
+LIN_DOCTOR = r"""
+. /etc/os-release 2>/dev/null; echo "user=$(whoami) host=$(hostname -s) arch=$(uname -m)"
+echo "os=${PRETTY_NAME:-?}  kernel=$(uname -r)"
+t() { if eval "$2" >/dev/null 2>&1; then echo "OK    $1"; else echo "MISSING $1"; fi; }
+t "passwordless sudo" 'sudo -n true'
+t "tunnel service running" 'systemctl is-active --quiet agenthub-remote-tunnel.service'
+t "private SSH socket active" 'systemctl is-active --quiet agenthub-remote-sshd.socket'
+st="$HOME/.local/share/agenthub-remote/ipc/status.txt"
+if [ -f "$st" ]; then age=$(( $(date +%s) - $(stat -c %Y "$st") )); if [ "$age" -lt 120 ]; then echo "OK    helper alive (status $age s old)"; else echo "MISSING helper (status $age s old: nobody is logged in to the desktop, or it stopped)"; fi; else echo "MISSING helper (never started)"; fi
+for tool in grim gnome-screenshot spectacle scrot import; do command -v $tool >/dev/null 2>&1 && echo "tool   $tool"; done
+echo "selinux=$(getenforce 2>/dev/null || echo n/a)"
+lsblk -rno TYPE 2>/dev/null | grep -q crypt && echo "NOTE  encrypted disk (LUKS): after a restart or power loss the computer waits at the disk-password screen and stays offline until it is entered"
+ls /sys/class/power_supply/BAT* >/dev/null 2>&1 && echo "NOTE  laptop: it suspends on battery or when the lid closes unless it is plugged in"
+echo "lid_on_power=$(systemd-analyze cat-config systemd/logind.conf 2>/dev/null | sed -n 's/^HandleLidSwitchExternalPower=//p' | tail -1)"
+"""
+
+
+def doctor_linux(a):
+    r = remote_exec(a.name, LIN_DOCTOR)
+    sys.stdout.write(r.stdout)
+    if r.returncode:
+        sys.stderr.write(r.stderr)
+        sys.exit(r.returncode)
+
+
 WIN_SHOT = r"""
 Add-Type -AssemblyName System.Windows.Forms, System.Drawing
 $vs = [System.Windows.Forms.SystemInformation]::VirtualScreen
@@ -1061,6 +1178,8 @@ if [ -n "$gw" ]; then r=$(/usr/bin/nc -z -G 3 "$gw" 53 2>&1); case "$r" in *"No 
 def cmd_doctor(a):
     if is_win(node(a.name)):
         return doctor_windows(a)
+    if node(a.name).get("platform") == "linux":
+        return doctor_linux(a)
     r = remote_exec(a.name, DOCTOR)
     sys.stdout.write(r.stdout)
     if r.returncode:
@@ -1080,7 +1199,7 @@ def main():
     p = argparse.ArgumentParser(prog="hermes-remote", description=__doc__.splitlines()[0])
     sp = p.add_subparsers(dest="cmd", required=True)
     s = sp.add_parser("relay-setup"); s.add_argument("--host"); s.add_argument("--owner", help="name shown to people in the installer prompts"); s.add_argument("--port", type=int); s.add_argument("--no-systemd", action="store_true"); s.set_defaults(f=cmd_relay_setup)
-    s = sp.add_parser("new-installer", help="make/rotate the reusable installer for a computer type"); s.add_argument("type", choices=sorted({**TYPES, **WIN_TYPES})); s.add_argument("--owner"); s.add_argument("--sudo", choices=("yes", "ask", "no"), default="yes"); s.add_argument("--expires-days", type=int, default=30); s.set_defaults(f=cmd_new_installer)
+    s = sp.add_parser("new-installer", help="make/rotate the reusable installer for a computer type"); s.add_argument("type", choices=sorted({**TYPES, **WIN_TYPES, **LINUX_TYPES})); s.add_argument("--owner"); s.add_argument("--sudo", choices=("yes", "ask", "no"), default="yes"); s.add_argument("--expires-days", type=int, default=30); s.set_defaults(f=cmd_new_installer)
     s = sp.add_parser("serve", help="temporary LAN download page with zipped installers"); s.add_argument("--bind", default=os.environ.get("HR_SERVE_BIND") or lan_ip()); s.add_argument("--port", type=int, default=8123); s.add_argument("--minutes", type=int, default=30); s.set_defaults(f=cmd_serve)
     s = sp.add_parser("diag", help="health report the installer sent from the Mac"); s.add_argument("name"); s.set_defaults(f=cmd_diag)
     s = sp.add_parser("new-join", help="open a time-limited setup window; prints the one-line command to give a person"); s.add_argument("--hours", type=float, default=4); s.add_argument("--sudo", choices=("yes", "ask", "no"), default="yes"); s.add_argument("--note", help="who this is for (shown in list)"); s.set_defaults(f=cmd_new_join)

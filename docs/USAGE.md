@@ -51,6 +51,10 @@ The same commands work, with these differences:
 
 See `WINDOWS.md`.
 
+## Linux nodes
+
+The same commands work. `run` uses the shell of the account (bash). `--root` uses `sudo -n`, like on a Mac, if the owner chose passwordless sudo at setup. `gui` runs in the helper in the signed-in user's desktop session. `screenshot` needs someone logged in to a desktop with an unlocked screen. `vnc` is not available. See `LINUX.md`.
+
 ## Ask AgentHub in chat
 
 AgentHub uses these commands through its terminal tool. Plain requests work:
@@ -70,7 +74,7 @@ AgentHub uses these commands through its terminal tool. Plain requests work:
 | `hermes-remote new-join --hours 4` | Open a timed window and print the command. |
 | `hermes-remote close-join` | Close a timed window. |
 | `hermes-remote joins` | Show if registration is open and how many Macs wait. |
-| `hermes-remote new-installer intel`, `silicon`, `win64` or `win32` | Build an installer file without GitHub. |
+| `hermes-remote new-installer intel`, `silicon`, `win64`, `win32` or `fedora` | Build an installer file without GitHub. |
 | `hermes-remote serve --minutes 60` | Serve the installer zips on the local network. |
 
 ## Helper app jobs

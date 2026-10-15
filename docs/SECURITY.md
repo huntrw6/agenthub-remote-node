@@ -58,6 +58,16 @@ The installer contains the relay host key. The Mac refuses any other key. AgentH
 - Windows has no `sudo` step: the connection has the rights of the signed-in account. On most home PCs that account is an administrator.
 - The installer has no Microsoft signature. For the `.cmd` file, SmartScreen asks for **More info**, then **Run anyway**. The join link does not.
 
+## On a Linux computer
+
+- The private SSH server is **not on the network**. A systemd socket listens on a unix socket in `/run/agenthub-remote`. systemd starts a new `sshd -i` for each connection. Only the outbound tunnel reaches it. Nothing listens on port 22 because of this installer.
+- The private `sshd` accepts the operator key only, for the signed-in user only (`AllowUsers`). No passwords, no keyboard-interactive login, no root login, no forwarding.
+- The tunnel runs as the system user `agenthub-remote` (no login shell, no home folder, `NoNewPrivileges`). It can read only its own key.
+- The files in `/etc/agenthub-remote` belong to root. The tunnel key is readable by the tunnel user only.
+- Passwordless sudo is the owner's choice at setup (`--sudo yes|ask|no`). It is a separate file, `/etc/sudoers.d/agenthub-remote`, checked with `visudo -c` before it is installed.
+- The helper runs in the signed-in user's session. It runs a job only if the signature is valid, the job is less than 10 minutes old, and the job id in the signed text matches the file name. It stops a job after 90 seconds.
+- The installer is a plain shell script. `join.sh` checks every file against `MANIFEST.sha256` first.
+
 ## Remaining risks
 
 - The installer has no Apple signature. For `.command` files, Gatekeeper needs right-click and Open. The join link does not need it.

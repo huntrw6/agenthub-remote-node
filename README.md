@@ -17,7 +17,7 @@ AgentHub host:
 - A router that forwards TCP port 2222 to the host
 - A DNS name that points to your home IP address
 
-Remote computer: macOS 15 or later (Intel and Apple silicon), or Windows 10 version 1809 or later (x64 and x32).
+Remote computer: macOS 15 or later (Intel and Apple silicon), Windows 10 version 1809 or later (x64 and x32), or Linux of the Fedora family (Fedora, RHEL, Rocky, AlmaLinux, CentOS Stream).
 
 ## Install
 
@@ -28,6 +28,7 @@ cd agenthub-remote-node
 bash tests/e2e-local.sh
 bash tests/e2e-join.sh
 PWSH=/path/to/pwsh bash tests/e2e-windows.sh   # needs PowerShell 7 (pwsh)
+bash tests/e2e-linux.sh
 ```
 
 Each test must show `ALL PASSED`.
@@ -48,7 +49,7 @@ Then forward TCP port 2222 on the router to the host. See `docs/SETUP.md`.
    git add -A && git commit -m "relay settings" && git push
    hermes-remote join-link on
    ```
-2. Give the person this command. They paste it in Terminal on the Mac:
+2. Give the person this command. They paste it in Terminal on the Mac or Linux computer:
    ```bash
    curl -fsSL https://raw.githubusercontent.com/huntrw6/agenthub-remote-node/main/join.sh | bash
    ```
@@ -69,9 +70,11 @@ For a Windows PC, the person pastes this in PowerShell instead:
    ```
    Windows asks for administrator permission, then shows an approval code. Windows is not tested on a real PC yet. See `docs/WINDOWS.md`.
 
+On Linux the same `join.sh` command works: it detects the system. Only the Fedora family is supported so far, and it is not tested on a real Fedora computer yet. See `docs/LINUX.md`.
+
 If you use a fork, change `HR_REPO` in `join.sh` and `join.ps1` and the addresses above to your fork.
 
-Without GitHub: use `hermes-remote new-installer intel` (or `silicon`, `win64`, `win32`) and `hermes-remote serve`. See `docs/SETUP.md`.
+Without GitHub: use `hermes-remote new-installer intel` (or `silicon`, `win64`, `win32`, `fedora`) and `hermes-remote serve`. See `docs/SETUP.md`.
 
 ## Use
 
@@ -99,10 +102,10 @@ The file `config/relay.env` is public by design. It holds the relay address and 
 | Path | Content |
 |---|---|
 | `hermes-remote` | The command-line tool |
-| `join.sh` | The script that the join link runs on a Mac |
+| `join.sh` | The script that the join link runs on a Mac or a Linux computer |
 | `join.ps1` | The script that the join link runs on a Windows PC |
-| `installer/` | The macOS and Windows installer templates and helper apps |
+| `installer/` | The macOS, Windows and Linux installer templates and helpers |
 | `config/relay.env` | Public relay settings (made by `export-config`) |
 | `install.sh` | Checks requirements and installs the tool |
 | `tests/` | Tests that need no Mac |
-| `docs/` | Usage, setup, Windows, restore, security, troubleshooting |
+| `docs/` | Usage, setup, Windows, Linux, restore, security, troubleshooting |

@@ -53,6 +53,8 @@ For each Windows PC, give the person this command. They paste it in PowerShell (
 
 `join.ps1` does the same checks as `join.sh`, then starts the Windows installer. See `WINDOWS.md`.
 
+For a Linux computer (Fedora family), use the same `join.sh` command as for a Mac. It detects the system. See `LINUX.md`.
+
 What happens on the Mac:
 1. `join.sh` finds the newest commit on `main`. It downloads every file from that one commit.
 2. It checks the files against `MANIFEST.sha256`. It stops if one file is wrong.
@@ -85,11 +87,13 @@ hermes-remote new-installer silicon
 hermes-remote serve --minutes 60
 ```
 
-`new-installer` makes one installer for each type in `~/.hermes-remote/installers/`. The types are `intel`, `silicon`, `win64` and `win32`. A Windows installer is one `.cmd` file (`AgentHub-Remote-Windows-x64.cmd` or `...-x32.cmd`). It is valid for 30 days. A new build stops all older copies. `serve` shows a local-network link with a random token. It stops by itself. For a person who is not on your network, send the zip by another way.
+`new-installer` makes one installer for each type in `~/.hermes-remote/installers/`. The types are `intel`, `silicon`, `win64`, `win32` and `fedora`. A Windows installer is one `.cmd` file (`AgentHub-Remote-Windows-x64.cmd` or `...-x32.cmd`). It is valid for 30 days. A new build stops all older copies. `serve` shows a local-network link with a random token. It stops by itself. For a person who is not on your network, send the zip by another way.
 
 On the Mac: unzip, right-click the `.command` file, select **Open**, select **Open** again.
 
 On Windows: unzip, double-click the `.cmd` file. If Windows says it protected the PC, select **More info**, then **Run anyway**.
+
+On Linux: unzip, then run `bash AgentHub-Remote-Fedora.sh` in a terminal.
 
 ## 4. What the installer does on the Mac
 
