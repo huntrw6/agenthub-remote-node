@@ -22,6 +22,18 @@ hermes-remote run <node> -- pkill -f "Hermes Remote Helper.app/Contents/MacOS"
 
 A LaunchAgent starts it again. Take a `screenshot` to see a pop-up.
 
+## A Windows PC shows `offline`
+
+1. Run `hermes-remote diag <node>`. It shows the state of the private SSH service and the tunnel task.
+2. A PC that is asleep, off, or in hibernation is offline. The installer turns sleep off only while plugged in. A laptop sleeps on battery.
+3. If BitLocker needs a PIN at startup, the PC stays offline until someone enters it.
+4. On the PC, in an administrator PowerShell: `Get-Service AgentHubSshd`, `Get-ScheduledTask AgentHubRemote*`. Read `C:\ProgramData\AgentHubRemote\tunnel.log` and `install.log`.
+5. Run the installer again. It is safe.
+
+## `screenshot` or `gui` fails on Windows
+
+The helper runs only while a person is signed in. It cannot capture a locked screen or the sign-in screen. Run `hermes-remote doctor <node>`: the line `helper alive` must show a status that is less than 120 seconds old.
+
 ## The join link says "closed"
 
 Registration is off. Run `hermes-remote join-link on`. If it stops with "published settings are out of date", run `export-config`, commit, push, and try again.

@@ -46,7 +46,10 @@ get() { curl -fsSL --proto '=https' --tlsv1.2 --retry 2 --max-time 60 "$BASE/$1"
 for f in MANIFEST.sha256 installer/mac-installer.sh.tmpl installer/helper.js installer/launcher.js config/relay.env; do get "$f"; done
 
 # every downloaded part must match the manifest, and every manifest entry must be present
-( cd "$W" && shasum -a 256 -c MANIFEST.sha256 >/dev/null 2>&1 ) || die "downloaded files do not match MANIFEST.sha256; stopping."
+# (the manifest also lists the Windows files, which a Mac does not download: check only the Mac files)
+grep -E '  (installer/mac-installer\.sh\.tmpl|installer/helper\.js|installer/launcher\.js|config/relay\.env)$' "$W/MANIFEST.sha256" > "$W/MANIFEST.mac" || true
+[ "$(wc -l < "$W/MANIFEST.mac" | tr -d ' ')" = 4 ] || die "MANIFEST.sha256 does not list all the Mac files; stopping."
+( cd "$W" && shasum -a 256 -c MANIFEST.mac >/dev/null 2>&1 ) || die "downloaded files do not match MANIFEST.sha256; stopping."
 for f in installer/mac-installer.sh.tmpl installer/helper.js installer/launcher.js config/relay.env; do
   grep -q "  $f\$" "$W/MANIFEST.sha256" || die "MANIFEST.sha256 does not list $f; stopping."
 done

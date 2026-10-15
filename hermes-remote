@@ -43,6 +43,7 @@ VNC_PORT_BASE = int(os.environ.get("HR_VNC_PORT_BASE", 25900))
 NAME_RE = re.compile(r"^[a-z0-9][a-z0-9-]{1,30}$")
 PUB_RE = re.compile(r"^ssh-ed25519 [A-Za-z0-9+/]{20,}={0,2}$")
 USER_RE = re.compile(r"^[A-Za-z0-9._-]{1,32}$")
+WIN_USER_RE = re.compile(r"^[A-Za-z0-9._ -]{1,32}$")  # Windows account names may contain spaces
 SELF = str(Path(__file__).resolve())
 
 
@@ -263,6 +264,7 @@ def relay_hostkey() -> str:
 
 # ------------------------------------------------------------- new / enroll -
 TYPES = {"intel": "Intel", "silicon": "AppleSilicon"}
+WIN_TYPES = {"win64": "x64", "win32": "x32"}  # Windows 64-bit / 32-bit installers
 MAX_PENDING = 10
 JOIN_NEW_PER_IP, JOIN_NEW_WINDOW = 3, 3600  # new registrations allowed per source IP per hour
 
@@ -288,6 +290,16 @@ def cmd_new_installer(a):
     st.setdefault("groups", {})[a.type] = {"enroll_pub": enroll_pub, "expires": expires, "sudo": a.sudo, "created": now()}
     save(st)
     write_relay_files(st)
+    if a.type in WIN_TYPES:
+        out = HOME / "installers"
+        out.mkdir(mode=0o700, exist_ok=True)
+        path = out / f"AgentHub-Remote-Windows-{WIN_TYPES[a.type]}.cmd"
+        path.write_bytes(build_windows_installer(
+            a.type, a.owner or st["relay"].get("owner") or "the support person", st, hostkey, hermes_pub, enroll_priv, expires, ""))
+        os.chmod(path, 0o600)
+        print(f"installer: {path}")
+        print(f"reusable for any Windows {WIN_TYPES[a.type]} PC until {expires}; it can only register a PENDING machine, nothing works until you approve its code.")
+        return
     tmpl = (HERE / "installer" / "mac-installer.sh.tmpl").read_text()
     subs = {
         "TYPE": a.type, "OWNER": a.owner or st["relay"].get("owner") or "the support person", "DATE": now(), "EXPIRES": expires,
@@ -307,6 +319,46 @@ def cmd_new_installer(a):
     print(f"installer: {path}")
     print(f"reusable for any {TYPES[a.type]} Mac until {expires}; it can only register a PENDING machine, nothing works until you approve its code.")
     print("each Mac is named from its hostname; nickname later: hermes-remote nickname <node> <nick>")
+
+
+def ps_quote(text: str) -> str:
+    """PowerShell single-quoted string literal."""
+    return "'" + text.replace("'", "''") + "'"
+
+
+WIN_CMD_HEAD = (
+    "@echo off\r\nsetlocal\r\ntitle AgentHub Remote Support\r\nset \"HR_SELF=%~f0\"\r\n"
+    "powershell -NoProfile -ExecutionPolicy Bypass -Command \"$t=[IO.File]::ReadAllText($env:HR_SELF); $m='#'+'---PS1---'; "
+    "$i=$t.IndexOf($m); $f=Join-Path $env:TEMP 'AgentHubRemoteInstall.ps1'; "
+    "[IO.File]::WriteAllText($f,$t.Substring($i+$m.Length),(New-Object Text.UTF8Encoding($true))); & $f; Remove-Item -LiteralPath $f -Force -ErrorAction SilentlyContinue\"\r\n"
+    "if errorlevel 1 pause\r\nexit /b\r\n#---PS1---\r\n"
+)
+
+
+def fill_windows_template(tmpl: str, subs: dict) -> str:
+    """Replace @@NAME@@ placeholders with PowerShell string literals; every placeholder must have a value."""
+    def one(m):
+        if m.group(1) not in subs:
+            raise ValueError("no value for " + m.group(1))
+        return ps_quote(subs[m.group(1)])
+    out = re.sub(r"@@([A-Z0-9_]+)@@", one, tmpl)
+    if "@@" in out:
+        raise ValueError("unfilled placeholder")
+    return out
+
+
+def build_windows_installer(wtype: str, owner: str, st: dict, hostkey: str, hermes_pub: str, enroll_priv: str, expires: str, join_mode: str) -> bytes:
+    """One self-extracting .cmd: a few batch lines that unpack and run the PowerShell installer."""
+    subs = {
+        "TYPE": wtype, "OWNER": owner, "DATE": now(), "EXPIRES": expires, "RELAY_HOST": st["relay"]["host"],
+        "RELAY_PORT": str(st["relay"]["port"]), "RELAY_USER": st["relay"]["user"], "RELAY_HOSTKEY": hostkey,
+        "HERMES_PUB": hermes_pub, "JOIN_MODE": join_mode, "ENROLL_KEY_B64": base64.b64encode(enroll_priv.encode()).decode(),
+        "HELPER_B64": base64.b64encode((HERE / "installer" / "win-helper.ps1").read_bytes()).decode(),
+    }
+    body = fill_windows_template((HERE / "installer" / "win-installer.ps1.tmpl").read_text(), subs)
+    if not body.isascii():
+        body = body.encode("ascii", "replace").decode()
+    return (WIN_CMD_HEAD + body.replace("\r\n", "\n").replace("\n", "\r\n")).encode("ascii")
 
 
 def join_check(st: dict, ip: str) -> dict:
@@ -346,7 +398,10 @@ def cmd_enroll_handler(a):
         signal.alarm(10)
         d = json.loads(sys.stdin.read(8192))
         tp, hk, user = d.get("tunnel_pub", ""), d.get("mac_hostkey", ""), d.get("mac_user", "")
-        if not (PUB_RE.match(tp) and PUB_RE.match(hk) and USER_RE.match(user)):
+        win = a.name in WIN_TYPES or (join_mode and str(d.get("platform", "")) == "windows")
+        if win and str(d.get("type", a.name)) not in WIN_TYPES:
+            raise ValueError("invalid payload")
+        if not (PUB_RE.match(tp) and PUB_RE.match(hk) and (WIN_USER_RE if win else USER_RE).match(user)):
             raise ValueError("invalid payload")
         diag = ""
         if d.get("diag_b64"):
@@ -373,7 +428,7 @@ def cmd_enroll_handler(a):
                 sudo = jrec["sudo"]
             else:  # known machine re-running: keep what it already has, even after the window closed
                 sudo = st["nodes"][same[0]].get("sudo", "yes")
-            ntype = "intel" if str(d.get("arch", "")) == "x86_64" else "silicon"
+            ntype = str(d["type"]) if win else ("intel" if str(d.get("arch", "")) == "x86_64" else "silicon")
         else:
             sudo, ntype = g["sudo"], a.name
         if same:
@@ -389,7 +444,7 @@ def cmd_enroll_handler(a):
             st["nodes"][name] = {"id": nid, "ssh_port": SSH_PORT_BASE + nid, "vnc_port": VNC_PORT_BASE + nid}
         n = st["nodes"][name]
         n.update(
-            state="pending", platform="macos", type=ntype, sudo=sudo, tunnel_pub=tp, mac_hostkey=hk,
+            state="pending", platform="windows" if win else "macos", type=ntype, sudo=sudo, tunnel_pub=tp, mac_hostkey=hk,
             mac_user=user, enrolled=now(), code=code_for(tp, hk),
             info={k: str(d.get(k, ""))[:80] for k in ("hostname", "arch", "os")},
         )
@@ -460,6 +515,8 @@ def cmd_new_join(a):
     print(f"setup window open until {exp}  (sudo={a.sudo}; `hermes-remote close-join` ends it early)")
     print("give the person this command to paste into Terminal on the Mac:\n")
     print(f"  curl -fsSL {base}/join.sh | bash -s -- {base}\n")
+    print("or this one, to paste into PowerShell on a Windows PC:\n")
+    print(f"  [Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12; $env:HR_JOIN_BASE='{base}'; irm {base}/join.ps1 | iex\n")
     print("they read you the approval code the Mac shows at the end, then:")
     print("  hermes-remote list   ->   hermes-remote approve <name> <code>")
 
@@ -495,6 +552,8 @@ def cmd_join_link(a):
         save(st)
         write_relay_files(st)
         print(f"join link ON (sudo={a.sudo}). Anyone running the setup command can register a PENDING computer.")
+        print("Mac (Terminal):        curl -fsSL https://raw.githubusercontent.com/<you>/<repo>/main/join.sh | bash")
+        print("Windows (PowerShell):  [Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12; irm https://raw.githubusercontent.com/<you>/<repo>/main/join.ps1 | iex")
         print("nothing works until you run: hermes-remote approve <name> <code>  (the code is shown on that Mac)")
     elif a.mode == "off":
         st["join_always"] = None
@@ -541,7 +600,7 @@ def cmd_export_config(a):
     text = "# PUBLIC client settings for join.sh. JOIN_KEY_B64 is deliberately public: it can only submit a registration, only while the owner has the join link on, and nothing works until the owner approves the code the Mac shows.\n"
     text += "".join(f"{k}={shlex.quote(v)}\n" for k, v in vals.items())
     (out / "config" / "relay.env").write_text(text)
-    files = ["installer/mac-installer.sh.tmpl", "installer/helper.js", "installer/launcher.js", "config/relay.env"]
+    files = ["installer/mac-installer.sh.tmpl", "installer/helper.js", "installer/launcher.js", "installer/win-installer.ps1.tmpl", "installer/win-helper.ps1", "config/relay.env"]
     (out / "MANIFEST.sha256").write_text("".join(f"{hashlib.sha256((out / f).read_bytes()).hexdigest()}  {f}\n" for f in files))
     print(f"wrote {out}/config/relay.env and MANIFEST.sha256; commit and push, then run join-link on")
 
@@ -586,6 +645,15 @@ def make_zips() -> dict:
             zf.writestr(info, src.read_bytes())
         os.chmod(z, 0o600)
         res[label] = (z, hashlib.sha256(z.read_bytes()).hexdigest())
+    for t, label in WIN_TYPES.items():
+        src = out / f"AgentHub-Remote-Windows-{label}.cmd"
+        if not src.exists():
+            continue
+        z = out / f"AgentHub-Remote-Windows-{label}.zip"
+        with zipfile.ZipFile(z, "w") as zf:
+            zf.writestr(zipfile.ZipInfo(src.name, date_time=dt.datetime.now().timetuple()[:6]), src.read_bytes(), zipfile.ZIP_DEFLATED)
+        os.chmod(z, 0o600)
+        res["Windows " + label] = (z, hashlib.sha256(z.read_bytes()).hexdigest())
     return res
 
 
@@ -607,9 +675,9 @@ def cmd_serve(a):
         "<!doctype html><meta charset=utf-8><meta name=viewport content='width=device-width'>"
         "<title>AgentHub Remote installers</title><body style='font:16px system-ui;max-width:42rem;margin:3rem auto;padding:0 1rem'>"
         "<h1>AgentHub Remote installers</h1><p>Pick the one matching the Mac "
-        "( menu &gt; About This Mac: <b>Intel</b> or <b>Apple M-chip</b>).</p>"
+        "(Mac: menu &gt; About This Mac, <b>Intel</b> or <b>Apple M-chip</b>. Windows: <b>x64</b> for almost every PC; <b>x32</b> only for old 32-bit Windows).</p>"
         f"<ul>{rows}</ul><ol><li>Double-click the downloaded zip to unzip it.</li>"
-        "<li><b>Right-click</b> the .command file and choose <b>Open</b>, then Open again.</li>"
+        "<li>Mac: <b>right-click</b> the .command file and choose <b>Open</b>, then Open again. Windows: double-click the .cmd file; if Windows says it protected your PC, choose <b>More info</b>, then <b>Run anyway</b>.</li>"
         "<li>Follow the steps; read the final code to the person who sent you here.</li></ol></body>"
     ).encode()
     prefix = f"/{token}/"
@@ -728,8 +796,33 @@ def node(name: str) -> dict:
     return st["nodes"][resolve(st, name)]
 
 
+def is_win(n: dict) -> bool:
+    return n.get("platform") == "windows"
+
+
+def ps_encoded(script: str) -> str:
+    """A command line that runs a PowerShell script on Windows (any quoting survives; cmd.exe is the SSH shell)."""
+    enc = base64.b64encode(("$ProgressPreference='SilentlyContinue';" + script).encode("utf-16-le")).decode()
+    return f"powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand {enc}"
+
+
+def ps_join(argv: list) -> str:
+    """argv -> a PowerShell call: & 'prog' 'arg' ..."""
+    q = lambda x: "'" + x.replace("'", "''") + "'"  # noqa: E731
+    return "& " + " ".join(q(x) for x in argv)
+
+
 def remote_exec(name: str, script: str, root: bool = False) -> subprocess.CompletedProcess:
     n = node(name)
+    if is_win(n):
+        # no sudo on Windows: commands run with the rights of the account the node logs in as
+        line = ps_encoded(script)
+        if len(line) > 7000:  # cmd.exe limits a command line to 8191 characters: upload long scripts as a file and run that
+            sp = f"$env:TEMP/hr-{secrets_hex(6)}.ps1"
+            win_put(n, sp, b"\xef\xbb\xbf" + script.encode())  # BOM so Windows PowerShell 5.1 reads UTF-8
+            run_it = ps_encoded(f"$p=$ExecutionContext.InvokeCommand.ExpandString({ps_quote(sp)}); & powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $p; $c=$LASTEXITCODE; Remove-Item -LiteralPath $p -Force -ErrorAction SilentlyContinue; exit $c")
+            return subprocess.run(ssh_base(n) + [run_it], text=True, capture_output=True)
+        return subprocess.run(ssh_base(n) + [line], text=True, capture_output=True)
     if root:
         script = f"sudo -n /bin/sh -c {shlex.quote(script)}"
     return subprocess.run(ssh_base(n) + [script], text=True, capture_output=True)
@@ -741,7 +834,7 @@ def cmd_run(a):
         die("put --sh/--root before the node name: run --sh <node> '<script>'")
     if not argv:
         die("no command")
-    script = argv[0] if a.sh else shlex.join(argv)
+    script = argv[0] if a.sh else (ps_join(argv) if is_win(node(a.name)) else shlex.join(argv))
     r = remote_exec(a.name, script, a.root)
     sys.stdout.write(r.stdout)
     sys.stderr.write(r.stderr)
@@ -757,6 +850,8 @@ def app_job(name: str, cmd: str, timeout: int = 60) -> tuple[int, str]:
     The job is signed with the operator key; the helper verifies against a root-owned allowed_signers."""
     import time
     n = node(name)
+    if is_win(n):
+        return win_app_job(n, cmd, timeout)
     jid = secrets_hex(8)
     job = json.dumps({"id": jid, "ts": int(time.time()), "cmd": cmd})
     with tempfile.TemporaryDirectory() as td:
@@ -781,13 +876,58 @@ def app_job(name: str, cmd: str, timeout: int = 60) -> tuple[int, str]:
     die("the helper app did not answer (not running, or the Mac is asleep/locked out)")
 
 
+WIN_BASE = "$env:ProgramData/AgentHubRemote"  # forward slashes work in PowerShell on Windows
+
+
+def win_put(n: dict, remote_path: str, data: bytes) -> None:
+    """Write bytes to a Windows file over SSH (stdin -> file), atomically via a temp name."""
+    script = (f"$p={ps_quote(remote_path)}; $p=$ExecutionContext.InvokeCommand.ExpandString($p); "
+              "$t=$p+'.tmp'; $f=[IO.File]::Create($t); [Console]::OpenStandardInput().CopyTo($f); $f.Close(); Move-Item -LiteralPath $t -Destination $p -Force")
+    r = subprocess.run(ssh_base(n) + [ps_encoded(script)], input=data, capture_output=True)
+    if r.returncode:
+        die("could not write file on the PC: " + r.stderr.decode(errors="replace").strip()[:200])
+
+
+def win_get(n: dict, remote_path: str, delete: bool = False) -> subprocess.CompletedProcess:
+    script = (f"$p={ps_quote(remote_path)}; $p=$ExecutionContext.InvokeCommand.ExpandString($p); "
+              "if(!(Test-Path -LiteralPath $p)){exit 3}; $b=[IO.File]::ReadAllBytes($p); "
+              "$o=[Console]::OpenStandardOutput(); $o.Write($b,0,$b.Length); $o.Flush(); "
+              + ("Remove-Item -LiteralPath $p -Force" if delete else ""))
+    return subprocess.run(ssh_base(n) + [ps_encoded(script)], capture_output=True)
+
+
+def win_app_job(n: dict, cmd: str, timeout: int) -> tuple[int, str]:
+    """Run a PowerShell snippet inside the helper in the signed-in user's desktop session (signed job)."""
+    import time
+    jid = secrets_hex(8)
+    job = json.dumps({"id": jid, "ts": int(time.time()), "cmd": cmd})
+    with tempfile.TemporaryDirectory() as td:
+        jf = Path(td) / "job"
+        jf.write_text(job)
+        r = run(["ssh-keygen", "-q", "-Y", "sign", "-f", str(KEYS / "hermes_ed25519"), "-n", "hermes-remote-job", str(jf)])
+        if r.returncode:
+            die("signing failed: " + r.stderr.strip())
+        sig = (Path(td) / "job.sig").read_text()
+    d = WIN_BASE + "/ipc/jobs"
+    win_put(n, f"{d}/{jid}.job", job.encode())
+    win_put(n, f"{d}/{jid}.sig", sig.encode())
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        time.sleep(1.5)
+        r = win_get(n, f"{d}/{jid}.out", delete=True)
+        if r.returncode == 0 and r.stdout.strip():
+            o = json.loads(r.stdout.decode())
+            return o["rc"], base64.b64decode(o["out"]).decode(errors="replace")
+    die("the helper did not answer (nobody is signed in on the PC, it is asleep, or the helper is not running)")
+
+
 def secrets_hex(n: int) -> str:
     return os.urandom(n).hex()
 
 
 def cmd_gui(a):
     argv = a.argv[1:] if a.argv and a.argv[0] == "--" else a.argv
-    rc, out = app_job(a.name, argv[0] if a.sh else shlex.join(argv), a.timeout)
+    rc, out = app_job(a.name, argv[0] if a.sh else (ps_join(argv) if is_win(node(a.name)) else shlex.join(argv)), a.timeout)
     sys.stdout.write(out)
     sys.exit(rc)
 
@@ -796,13 +936,16 @@ def cmd_screenshot(a):
     out = HOME / "shots"
     out.mkdir(mode=0o700, exist_ok=True)
     dest = out / f"{a.name}-{dt.datetime.now().strftime('%Y%m%d-%H%M%S')}.png"
-    rc, o = app_job(a.name, 't=$(mktemp /tmp/hr.XXXXXX); /usr/sbin/screencapture -x -t png "$t" && /usr/bin/base64 < "$t"; rm -f "$t"', 60)
+    if is_win(node(a.name)):
+        rc, o = app_job(a.name, WIN_SHOT, 60)
+    else:
+        rc, o = app_job(a.name, 't=$(mktemp /tmp/hr.XXXXXX); /usr/sbin/screencapture -x -t png "$t" && /usr/bin/base64 < "$t"; rm -f "$t"', 60)
     try:
         data = base64.b64decode("".join(o.split()), validate=False)
     except Exception:  # noqa: BLE001
         data = b""
     if rc or not data.startswith(b"\x89PNG"):
-        die("screenshot failed: " + o.strip()[:300] + " (Screen Recording allowed for the helper? run doctor)")
+        die("screenshot failed: " + o.strip()[:300] + (" (is someone signed in and is the screen unlocked? run doctor)" if is_win(node(a.name)) else " (Screen Recording allowed for the helper? run doctor)"))
     dest.write_bytes(data)
     print(dest)
 
@@ -810,6 +953,16 @@ def cmd_screenshot(a):
 def cmd_push(a):
     """File transfer over the existing SSH channel (no scp/sftp dependency)."""
     n = node(a.name)
+    if is_win(n):
+        if a.direction == "push":
+            win_put(n, a.remote, Path(a.local).read_bytes())
+        else:
+            r = win_get(n, a.remote)
+            if r.returncode:
+                die("transfer failed: " + (r.stderr.decode(errors="replace").strip()[:300] or "file not found"))
+            Path(a.local).write_bytes(r.stdout)
+        print("ok")
+        return
     q = shlex.quote(a.remote)
     if a.direction == "push":
         with open(a.local, "rb") as f:
@@ -826,12 +979,55 @@ def cmd_push(a):
 
 def cmd_vnc(a):
     n = node(a.name)
+    if is_win(n):
+        die("Windows nodes have no VNC tunnel. Use: screenshot <node>, or run/gui commands.")
     print(f"1) tunnel (from a machine that can reach this host): ssh -L 5901:127.0.0.1:{n['vnc_port']} {load()['relay']['user']}@<this-host>")
     print("2) then open vnc://127.0.0.1:5901 and sign in with the Mac account password.")
 
 
 # Plain-SSH checks: NOTHING here may touch a privacy-protected resource (that would raise a macOS
 # prompt attributed to sshd-keygen-wrapper). Permission probes run inside the helper app instead.
+WIN_SHOT = r"""
+Add-Type -AssemblyName System.Windows.Forms, System.Drawing
+$vs = [System.Windows.Forms.SystemInformation]::VirtualScreen
+$bmp = New-Object System.Drawing.Bitmap $vs.Width, $vs.Height
+$g = [System.Drawing.Graphics]::FromImage($bmp)
+$g.CopyFromScreen($vs.Left, $vs.Top, 0, 0, $bmp.Size)
+$ms = New-Object System.IO.MemoryStream
+$bmp.Save($ms, [System.Drawing.Imaging.ImageFormat]::Png)
+[Convert]::ToBase64String($ms.ToArray())
+"""
+
+WIN_DOCTOR = r"""
+$o = Get-CimInstance Win32_OperatingSystem
+"user=$env:USERNAME host=$env:COMPUTERNAME arch=$($env:PROCESSOR_ARCHITECTURE)"
+"windows=$($o.Caption) $($o.Version) build $($o.BuildNumber)"
+$admin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+if ($admin) { 'OK    running with administrator rights (this connection)' } else { 'NOTE  this connection is a standard user, not administrator' }
+$cs = Get-CimInstance Win32_ComputerSystem
+"signed_in_user=$($cs.UserName)"
+foreach ($t in 'AgentHubRemoteTunnel','AgentHubRemoteHelper') { $x = Get-ScheduledTask -TaskName $t -ErrorAction SilentlyContinue; if ($x) { "OK    task $t state=$($x.State)" } else { "MISSING task $t" } }
+$sv = Get-Service AgentHubSshd -ErrorAction SilentlyContinue
+if ($sv -and $sv.Status -eq 'Running') { 'OK    private SSH service running' } else { 'MISSING private SSH service' }
+$st = Join-Path $env:ProgramData 'AgentHubRemote\ipc\status.txt'
+if (Test-Path $st) { $age = [int]((Get-Date) - (Get-Item $st).LastWriteTime).TotalSeconds; if ($age -lt 120) { "OK    helper alive (status $age s old)" } else { "MISSING helper (status $age s old: nobody signed in, or it stopped)" } } else { 'MISSING helper (never started)' }
+try { $pw = (powercfg /query SCHEME_CURRENT SUB_SLEEP STANDBYIDLE 2>$null | Select-String 'Current AC Power Setting Index').ToString().Split(':')[-1].Trim(); "ac_sleep_seconds=$([Convert]::ToInt64($pw,16))  (0 = never)" } catch { 'ac_sleep_seconds=unknown' }
+if (Get-CimInstance Win32_Battery -ErrorAction SilentlyContinue) { 'NOTE  laptop: sleeps on battery or with the lid closed unless plugged in and lid open' }
+try { $bl = Get-BitLockerVolume -MountPoint $env:SystemDrive -ErrorAction Stop; "bitlocker=$($bl.ProtectionStatus)" } catch { }
+"""
+
+
+def doctor_windows(a):
+    r = remote_exec(a.name, WIN_DOCTOR)
+    sys.stdout.write(r.stdout)
+    if r.returncode:
+        sys.stderr.write(r.stderr)
+        sys.exit(r.returncode)
+    rc, o = app_job(a.name, "'helper session: ' + [Diagnostics.Process]::GetCurrentProcess().SessionId; Add-Type -AssemblyName System.Windows.Forms; 'screen: ' + [Windows.Forms.SystemInformation]::VirtualScreen.Width + 'x' + [Windows.Forms.SystemInformation]::VirtualScreen.Height", 40)
+    print("--- desktop session, checked from inside the helper ---")
+    print(o.strip())
+
+
 DOCTOR = r"""
 echo "user=$(whoami) host=$(scutil --get ComputerName 2>/dev/null) arch=$(uname -m)"
 echo "macos=$(sw_vers -productVersion)"
@@ -863,6 +1059,8 @@ if [ -n "$gw" ]; then r=$(/usr/bin/nc -z -G 3 "$gw" 53 2>&1); case "$r" in *"No 
 
 
 def cmd_doctor(a):
+    if is_win(node(a.name)):
+        return doctor_windows(a)
     r = remote_exec(a.name, DOCTOR)
     sys.stdout.write(r.stdout)
     if r.returncode:
@@ -882,7 +1080,7 @@ def main():
     p = argparse.ArgumentParser(prog="hermes-remote", description=__doc__.splitlines()[0])
     sp = p.add_subparsers(dest="cmd", required=True)
     s = sp.add_parser("relay-setup"); s.add_argument("--host"); s.add_argument("--owner", help="name shown to people in the installer prompts"); s.add_argument("--port", type=int); s.add_argument("--no-systemd", action="store_true"); s.set_defaults(f=cmd_relay_setup)
-    s = sp.add_parser("new-installer", help="make/rotate the reusable installer for a computer type"); s.add_argument("type", choices=sorted(TYPES)); s.add_argument("--owner"); s.add_argument("--sudo", choices=("yes", "ask", "no"), default="yes"); s.add_argument("--expires-days", type=int, default=30); s.set_defaults(f=cmd_new_installer)
+    s = sp.add_parser("new-installer", help="make/rotate the reusable installer for a computer type"); s.add_argument("type", choices=sorted({**TYPES, **WIN_TYPES})); s.add_argument("--owner"); s.add_argument("--sudo", choices=("yes", "ask", "no"), default="yes"); s.add_argument("--expires-days", type=int, default=30); s.set_defaults(f=cmd_new_installer)
     s = sp.add_parser("serve", help="temporary LAN download page with zipped installers"); s.add_argument("--bind", default=os.environ.get("HR_SERVE_BIND") or lan_ip()); s.add_argument("--port", type=int, default=8123); s.add_argument("--minutes", type=int, default=30); s.set_defaults(f=cmd_serve)
     s = sp.add_parser("diag", help="health report the installer sent from the Mac"); s.add_argument("name"); s.set_defaults(f=cmd_diag)
     s = sp.add_parser("new-join", help="open a time-limited setup window; prints the one-line command to give a person"); s.add_argument("--hours", type=float, default=4); s.add_argument("--sudo", choices=("yes", "ask", "no"), default="yes"); s.add_argument("--note", help="who this is for (shown in list)"); s.set_defaults(f=cmd_new_join)

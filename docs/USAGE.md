@@ -16,14 +16,14 @@ janes-imac (office)  active  ONLINE  jane  x86_64  15.7.9
 | See which computers are enrolled and online | `hermes-remote list` | `ONLINE` means the tunnel is up and the Mac's sshd answers. |
 | Run a command | `hermes-remote run <node> -- <argv>` | Runs as the Mac's user over SSH. |
 | Run a shell script | `hermes-remote run --sh <node> '<script>'` | Put `--sh` and `--root` before the node. |
-| Run as root | `hermes-remote run --root <node> -- <argv>` | Uses `sudo -n`. Works unless the Mac was set up with sudo `no`. |
-| Look at the screen | `hermes-remote screenshot <node>` | Saves a PNG in `~/.hermes-remote/shots/` and prints the path. |
+| Run as root | `hermes-remote run --root <node> -- <argv>` | Mac only. Uses `sudo -n`. On Windows, commands already run with the rights of the signed-in account (an administrator on most home PCs). |
+| Look at the screen | `hermes-remote screenshot <node>` | Saves a PNG in `~/.hermes-remote/shots/` and prints the path. Windows: needs someone signed in and the screen unlocked. |
 | Do something that needs a macOS permission | `hermes-remote gui <node> -- <argv>` or `gui --sh <node> '<script>'` | Runs inside the Hermes Remote Helper app, which holds the permissions. Signed job. 90 second limit. |
 | Copy files | `hermes-remote push <node> <local> <remote>` or `pull <node> <remote> <local>` | Uses the SSH connection. |
 | Check permissions and power settings | `hermes-remote doctor <node>` | Does not cause macOS pop-ups. |
 | Read the report the installer sent | `hermes-remote diag <node>` | Service state and tunnel log from install time. |
 | Open a shell | `hermes-remote shell <node>` | Needs a terminal. For a person. |
-| Show the Screen Sharing recipe | `hermes-remote vnc <node>` | |
+| Show the Screen Sharing recipe | `hermes-remote vnc <node>` | Mac only. |
 | Give a node a nickname | `hermes-remote nickname <node> <nick>` | |
 | Approve a new Mac | `hermes-remote approve <node> <code>` | The code is on the Mac's screen. |
 | Remove a Mac | `hermes-remote revoke <node>` | Removes its key and closes its tunnel. |
@@ -37,6 +37,19 @@ hermes-remote run --root office -- /usr/sbin/systemsetup -getremotelogin
 hermes-remote gui --sh office 'osascript -e "tell application \"Finder\" to get name"'
 hermes-remote pull office /Users/jane/Desktop/log.txt ./log.txt
 ```
+
+## Windows nodes
+
+The same commands work, with these differences:
+
+- `run` and `gui` use **PowerShell**, not a Unix shell. `run <node> -- Get-Process` and `run --sh <node> 'Get-Process | Select -First 3'` both work.
+- `--root` does nothing. There is no `sudo`.
+- `push` and `pull` take Windows paths. Forward slashes are fine: `push <node> ./a.txt C:/Users/jane/Desktop/a.txt`.
+- `gui` runs inside the helper in the signed-in user's desktop session. Use it for anything that needs the desktop. Plain `run` has no desktop.
+- `doctor` shows the tasks, the private SSH service, the helper, sleep settings and BitLocker.
+- `vnc` is not available.
+
+See `WINDOWS.md`.
 
 ## Ask AgentHub in chat
 
@@ -57,7 +70,7 @@ AgentHub uses these commands through its terminal tool. Plain requests work:
 | `hermes-remote new-join --hours 4` | Open a timed window and print the command. |
 | `hermes-remote close-join` | Close a timed window. |
 | `hermes-remote joins` | Show if registration is open and how many Macs wait. |
-| `hermes-remote new-installer intel` or `silicon` | Build an installer file without GitHub. |
+| `hermes-remote new-installer intel`, `silicon`, `win64` or `win32` | Build an installer file without GitHub. |
 | `hermes-remote serve --minutes 60` | Serve the installer zips on the local network. |
 
 ## Helper app jobs

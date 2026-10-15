@@ -48,6 +48,16 @@ The installer contains the relay host key. The Mac refuses any other key. AgentH
 - The helper app is owned by root. Its logic and its trusted signer file are in a root-owned folder. A job needs a valid signature from the operator key, must be less than 10 minutes old, and runs for 90 seconds at most.
 - No menu-bar icon. Uninstall works in Terminal only. The consent screen states what the user grants.
 
+## On a Windows PC
+
+- The installer downloads Microsoft's OpenSSH build from the project's GitHub release. The version is fixed and the SHA-256 value is in the installer. A file with another hash is deleted and the install stops.
+- It adds a private SSH service named `AgentHubSshd`. It listens on `127.0.0.1:22022` only, so the network cannot reach it. Only the outbound tunnel reaches it. Password login is off. Only the operator key is accepted. It does not change the PC's own OpenSSH Server if one exists.
+- The tunnel is a scheduled task that runs as SYSTEM at startup. It makes the same restricted outbound connection as on a Mac.
+- Only administrators can change the files in `C:\ProgramData\AgentHubRemote`. The tunnel key and host key are readable by SYSTEM and administrators only.
+- The helper runs in the signed-in user's desktop session. It runs a job only if the signature is valid, the job is less than 10 minutes old, and the job id matches. It stops a job after 90 seconds.
+- Windows has no `sudo` step: the connection has the rights of the signed-in account. On most home PCs that account is an administrator.
+- The installer has no Microsoft signature. For the `.cmd` file, SmartScreen asks for **More info**, then **Run anyway**. The join link does not.
+
 ## Remaining risks
 
 - The installer has no Apple signature. For `.command` files, Gatekeeper needs right-click and Open. The join link does not need it.

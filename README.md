@@ -17,7 +17,7 @@ AgentHub host:
 - A router that forwards TCP port 2222 to the host
 - A DNS name that points to your home IP address
 
-Remote computer: macOS 15 or later. Intel and Apple silicon are supported.
+Remote computer: macOS 15 or later (Intel and Apple silicon), or Windows 10 version 1809 or later (x64 and x32).
 
 ## Install
 
@@ -27,6 +27,7 @@ cd agenthub-remote-node
 ./install.sh
 bash tests/e2e-local.sh
 bash tests/e2e-join.sh
+PWSH=/path/to/pwsh bash tests/e2e-windows.sh   # needs PowerShell 7 (pwsh)
 ```
 
 Each test must show `ALL PASSED`.
@@ -62,9 +63,15 @@ Then forward TCP port 2222 on the router to the host. See `docs/SETUP.md`.
 
 To turn the link off: `hermes-remote join-link off`.
 
-If you use a fork, change `HR_REPO` in `join.sh` and the address above to your fork.
+For a Windows PC, the person pastes this in PowerShell instead:
+   ```powershell
+   [Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12; irm https://raw.githubusercontent.com/huntrw6/agenthub-remote-node/main/join.ps1 | iex
+   ```
+   Windows asks for administrator permission, then shows an approval code. Windows is not tested on a real PC yet. See `docs/WINDOWS.md`.
 
-Without GitHub: use `hermes-remote new-installer intel` (or `silicon`) and `hermes-remote serve`. See `docs/SETUP.md`.
+If you use a fork, change `HR_REPO` in `join.sh` and `join.ps1` and the addresses above to your fork.
+
+Without GitHub: use `hermes-remote new-installer intel` (or `silicon`, `win64`, `win32`) and `hermes-remote serve`. See `docs/SETUP.md`.
 
 ## Use
 
@@ -92,9 +99,10 @@ The file `config/relay.env` is public by design. It holds the relay address and 
 | Path | Content |
 |---|---|
 | `hermes-remote` | The command-line tool |
-| `join.sh` | The script that the join link runs on the Mac |
-| `installer/` | The macOS installer template and the helper app |
+| `join.sh` | The script that the join link runs on a Mac |
+| `join.ps1` | The script that the join link runs on a Windows PC |
+| `installer/` | The macOS and Windows installer templates and helper apps |
 | `config/relay.env` | Public relay settings (made by `export-config`) |
 | `install.sh` | Checks requirements and installs the tool |
 | `tests/` | Tests that need no Mac |
-| `docs/` | Usage, setup, restore, security, troubleshooting |
+| `docs/` | Usage, setup, Windows, restore, security, troubleshooting |
