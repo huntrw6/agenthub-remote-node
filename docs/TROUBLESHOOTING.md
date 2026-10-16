@@ -38,8 +38,9 @@ The helper runs only while a person is signed in. It cannot capture a locked scr
 
 1. Run `hermes-remote diag <node>`. It shows the state of the socket and the tunnel service, the end of the tunnel log, the desktop type and the SELinux mode.
 2. On the computer: `systemctl status agenthub-remote-tunnel agenthub-remote-sshd.socket` and `sudo tail /etc/agenthub-remote/tunnel.log`.
+   If a connection opens and closes at once on Debian or Ubuntu, check `/run/sshd` exists while a connection is made (the service creates it).
 3. A computer that is asleep or off is offline. A laptop suspends on battery. A disk with LUKS encryption waits for its password after a restart.
-4. With SELinux on, look for denials: `sudo ausearch -m avc -ts recent`.
+4. With SELinux on (Fedora family), look for denials: `sudo ausearch -m avc -ts recent`. With AppArmor (Debian family): `sudo journalctl -k | grep -i apparmor`.
 5. Run the installer again. It is safe.
 
 ## `screenshot` fails on Linux

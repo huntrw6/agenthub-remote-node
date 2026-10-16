@@ -60,7 +60,7 @@ The installer contains the relay host key. The Mac refuses any other key. AgentH
 
 ## On a Linux computer
 
-- The private SSH server is **not on the network**. A systemd socket listens on a unix socket in `/run/agenthub-remote`. systemd starts a new `sshd -i` for each connection. Only the outbound tunnel reaches it. Nothing listens on port 22 because of this installer.
+- The private SSH server is **not on the network**. A systemd socket listens on a unix socket in `/run/agenthub-remote`. systemd starts a new `sshd -i` for each connection. Only the outbound tunnel reaches it. Nothing listens on port 22 because of this installer. On Debian and Ubuntu, the installer stops the package system from starting the normal SSH server when it installs `openssh-server`, and turns it off if it installed the package itself.
 - The private `sshd` accepts the operator key only, for the signed-in user only (`AllowUsers`). No passwords, no keyboard-interactive login, no root login, no forwarding.
 - The tunnel runs as the system user `agenthub-remote` (no login shell, no home folder, `NoNewPrivileges`). It can read only its own key.
 - The files in `/etc/agenthub-remote` belong to root. The tunnel key is readable by the tunnel user only.

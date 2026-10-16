@@ -17,7 +17,7 @@ AgentHub host:
 - A router that forwards TCP port 2222 to the host
 - A DNS name that points to your home IP address
 
-Remote computer: macOS 15 or later (Intel and Apple silicon), Windows 10 version 1809 or later (x64 and x32), or Linux of the Fedora family (Fedora, RHEL, Rocky, AlmaLinux, CentOS Stream).
+Remote computer: macOS 15 or later (Intel and Apple silicon), Windows 10 version 1809 or later (x64 and x32), or Linux of the Fedora family (Fedora, RHEL, Rocky, AlmaLinux, CentOS Stream) or the Debian family (Debian, Ubuntu, Linux Mint and others based on them).
 
 ## Install
 
@@ -70,11 +70,11 @@ For a Windows PC, the person pastes this in PowerShell instead:
    ```
    Windows asks for administrator permission, then shows an approval code. Windows is not tested on a real PC yet. See `docs/WINDOWS.md`.
 
-On Linux the same `join.sh` command works: it detects the system. Only the Fedora family is supported so far, and it is not tested on a real Fedora computer yet. See `docs/LINUX.md`.
+On Linux the same `join.sh` command works: it detects the system. The Fedora and Debian families are supported. Neither is tested on a real computer yet. See `docs/LINUX.md`.
 
 If you use a fork, change `HR_REPO` in `join.sh` and `join.ps1` and the addresses above to your fork.
 
-Without GitHub: use `hermes-remote new-installer intel` (or `silicon`, `win64`, `win32`, `fedora`) and `hermes-remote serve`. See `docs/SETUP.md`.
+Without GitHub: use `hermes-remote new-installer intel` (or `silicon`, `win64`, `win32`, `fedora`, `debian`) and `hermes-remote serve`. See `docs/SETUP.md`.
 
 ## Use
 

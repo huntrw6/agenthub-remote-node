@@ -7,7 +7,7 @@
 # sent you here. Nothing works until they approve that code. This script:
 #   0. looks up the newest commit on main and uses ONLY that commit for every file below
 #      (to use a fixed version instead, pass its raw URL as the first argument),
-#   1. detects the computer type (Intel or Apple silicon Mac; Fedora-family Linux),
+#   1. detects the computer type (Intel or Apple silicon Mac; Fedora-family or Debian-family Linux),
 #   2. downloads the installer parts from <base> and checks them against MANIFEST.sha256,
 #   3. fills in the public relay settings,
 #   4. runs the guided installer.
@@ -44,14 +44,15 @@ if [ "$OS" = Darwin ]; then
     *) die "unsupported Mac type: $(uname -m)";;
   esac
 else
-  # which Linux family? (only the Fedora family is supported so far)
+  # which Linux family? Fedora family (Fedora, RHEL, Rocky, Alma, CentOS Stream) or Debian family (Debian, Ubuntu, Mint, Pop!_OS...)
   ID=""; ID_LIKE=""
   # shellcheck disable=SC1091
   OSR="${HR_OS_RELEASE:-/etc/os-release}"   # (the override is for tests)
   [ -r "$OSR" ] && . "$OSR"
   case " ${ID:-} ${ID_LIKE:-} " in
     *" fedora "*|*" rhel "*|*" centos "*) TYPE=fedora;;
-    *) die "this Linux (${PRETTY_NAME:-unknown}) is not supported yet. Supported: Fedora, RHEL, Rocky Linux, AlmaLinux, CentOS Stream.";;
+    *" debian "*|*" ubuntu "*) TYPE=debian;;
+    *) die "this Linux (${PRETTY_NAME:-unknown}) is not supported yet. Supported: Fedora, RHEL, Rocky Linux, AlmaLinux, CentOS Stream, Debian, Ubuntu and systems based on them (Linux Mint, Pop!_OS, Raspberry Pi OS...).";;
   esac
   case "$(uname -m)" in x86_64|aarch64) ;; *) die "unsupported processor: $(uname -m)";; esac
 fi

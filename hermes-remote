@@ -265,7 +265,7 @@ def relay_hostkey() -> str:
 # ------------------------------------------------------------- new / enroll -
 TYPES = {"intel": "Intel", "silicon": "AppleSilicon"}
 WIN_TYPES = {"win64": "x64", "win32": "x32"}  # Windows 64-bit / 32-bit installers
-LINUX_TYPES = {"fedora": "Fedora"}  # Linux distribution families (one installer per family; the CPU is detected)
+LINUX_TYPES = {"fedora": "Fedora", "debian": "Debian"}  # Linux distribution families (one installer per family; the CPU is detected)
 MAX_PENDING = 10
 JOIN_NEW_PER_IP, JOIN_NEW_WINDOW = 3, 3600  # new registrations allowed per source IP per hour
 
@@ -299,7 +299,7 @@ def cmd_new_installer(a):
             a.type, a.owner or st["relay"].get("owner") or "the support person", st, hostkey, hermes_pub, enroll_priv, expires, "", a.sudo))
         os.chmod(path, 0o700)
         print(f"installer: {path}")
-        print(f"reusable for any {LINUX_TYPES[a.type]}-family Linux PC until {expires}; it can only register a PENDING machine, nothing works until you approve its code.")
+        print(f"reusable for any {LINUX_TYPES[a.type]}-family Linux computer until {expires}; it can only register a PENDING machine, nothing works until you approve its code.")
         return
     if a.type in WIN_TYPES:
         out = HOME / "installers"
@@ -547,7 +547,7 @@ def cmd_new_join(a):
     save(st)
     write_relay_files(st)
     print(f"setup window open until {exp}  (sudo={a.sudo}; `hermes-remote close-join` ends it early)")
-    print("give the person this command to paste into Terminal on a Mac or a Fedora-family Linux computer:\n")
+    print("give the person this command to paste into Terminal on a Mac or a Linux computer (Fedora or Debian family):\n")
     print(f"  curl -fsSL {base}/join.sh | bash -s -- {base}\n")
     print("or this one, to paste into PowerShell on a Windows PC:\n")
     print(f"  [Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12; $env:HR_JOIN_BASE='{base}'; irm {base}/join.ps1 | iex\n")
@@ -710,7 +710,7 @@ def cmd_serve(a):
     import threading
     zips = make_zips()
     if not zips:
-        die("no installers yet: run new-installer intel|silicon|win64|win32|fedora")
+        die("no installers yet: run new-installer intel|silicon|win64|win32|fedora|debian")
     token = secrets.token_urlsafe(16)
     names = {z.name: z for z, _ in zips.values()}
     rows = "".join(
@@ -721,9 +721,9 @@ def cmd_serve(a):
         "<!doctype html><meta charset=utf-8><meta name=viewport content='width=device-width'>"
         "<title>AgentHub Remote installers</title><body style='font:16px system-ui;max-width:42rem;margin:3rem auto;padding:0 1rem'>"
         "<h1>AgentHub Remote installers</h1><p>Pick the one matching the computer "
-        "(Mac: menu &gt; About This Mac, <b>Intel</b> or <b>Apple M-chip</b>. Windows: <b>x64</b> for almost every PC; <b>x32</b> only for old 32-bit Windows. Linux: Fedora, RHEL, Rocky, AlmaLinux).</p>"
+        "(Mac: menu &gt; About This Mac, <b>Intel</b> or <b>Apple M-chip</b>. Windows: <b>x64</b> for almost every PC; <b>x32</b> only for old 32-bit Windows. Linux: Fedora, RHEL, Rocky, AlmaLinux, Debian, Ubuntu, Mint).</p>"
         f"<ul>{rows}</ul><ol><li>Double-click the downloaded zip to unzip it.</li>"
-        "<li>Mac: <b>right-click</b> the .command file and choose <b>Open</b>, then Open again. Windows: double-click the .cmd file; if Windows says it protected your PC, choose <b>More info</b>, then <b>Run anyway</b>. Linux: open a terminal in the folder and run <b>bash AgentHub-Remote-Fedora.sh</b>.</li>"
+        "<li>Mac: <b>right-click</b> the .command file and choose <b>Open</b>, then Open again. Windows: double-click the .cmd file; if Windows says it protected your PC, choose <b>More info</b>, then <b>Run anyway</b>. Linux: open a terminal in the folder and run <b>bash AgentHub-Remote-Fedora.sh</b> (Fedora family) or <b>bash AgentHub-Remote-Debian.sh</b> (Debian, Ubuntu, Mint).</li>"
         "<li>Follow the steps; read the final code to the person who sent you here.</li></ol></body>"
     ).encode()
     prefix = f"/{token}/"

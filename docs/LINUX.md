@@ -1,22 +1,24 @@
 # Linux nodes
 
-Status: **written and tested without a Fedora computer.** I did not run a real Fedora install. What was tested:
+Status: **written and tested without a real Fedora, Debian or Ubuntu computer.** What was tested:
 
 - The installer logic, the join flow and the registration, on a test relay.
 - Every file the installer writes, checked with real tools: `bash -n`, `visudo -c`, `systemd-analyze verify`, and `sshd -t`.
-- The private SSH design, with the real **Fedora 44 OpenSSH 10.2** programs and libraries (from Fedora's own image): login through a reverse tunnel into a socket-activated `sshd -i`, a wrong key refused, another user refused.
+- The private SSH design, with the real OpenSSH programs and libraries from each distribution's own image: **Fedora 44 (OpenSSH 10.2), Debian 13 (OpenSSH 10.0) and Ubuntu 24.04 (OpenSSH 9.6)**. Each one: login through a reverse tunnel into a socket-activated `sshd -i`, a wrong key refused, another user refused.
+- The Debian and Ubuntu package scripts, run for real in their images: what `apt install openssh-server` enables, which files it makes, and the `/run/sshd` directory that `sshd` needs.
 - The helper and the signed jobs.
 
-Not tested, because they need a real Fedora system: `dnf install`, `systemctl enable`, the `useradd` step, SELinux, and a screenshot in a real desktop session. **Test on one Fedora computer you own before you give the command to anyone.**
+Not tested, because they need a real system: `dnf install` and `apt install` on a live computer, `systemctl enable`, the `useradd` step, SELinux and AppArmor, and a screenshot in a real desktop session. **Test on one computer of each family that you own before you give the command to anyone.**
 
 ## Supported
 
 | | |
 |---|---|
 | Fedora, RHEL, Rocky Linux, AlmaLinux, CentOS Stream (anything with `ID` or `ID_LIKE` of `fedora`, `rhel` or `centos`) | `fedora` installer |
+| Debian, Ubuntu, Linux Mint, Pop!_OS, Raspberry Pi OS and others based on them (`ID` or `ID_LIKE` of `debian` or `ubuntu`) | `debian` installer |
 | x86_64 and aarch64 | yes (the installer detects the CPU) |
 | systemd | required |
-| Debian, Ubuntu, Arch, openSUSE | not yet (the join command stops with a clear message) |
+| Arch, openSUSE, Alpine and others | not yet (the join command stops with a clear message) |
 
 ## Add a computer
 
@@ -26,9 +28,9 @@ Join link (the computer downloads from GitHub). The person pastes this in a term
 curl -fsSL https://raw.githubusercontent.com/huntrw6/agenthub-remote-node/main/join.sh | bash
 ```
 
-`join.sh` detects Mac or Linux by itself. On Linux it checks the distribution family.
+`join.sh` detects Mac or Linux by itself. On Linux it checks the distribution family and picks the right installer.
 
-Or an installer file: `hermes-remote new-installer fedora`, then `hermes-remote serve`. The file is `AgentHub-Remote-Fedora.sh`. The person runs `bash AgentHub-Remote-Fedora.sh`.
+Or an installer file: `hermes-remote new-installer fedora` or `new-installer debian`, then `hermes-remote serve`. The files are `AgentHub-Remote-Fedora.sh` and `AgentHub-Remote-Debian.sh`. The person runs `bash AgentHub-Remote-Debian.sh` (or the Fedora one). An installer for the wrong family stops with a message that names the right one.
 
 The person:
 1. Runs the command as their normal user (not as root). It asks for their password when it needs it.
@@ -48,9 +50,13 @@ You: `hermes-remote list`, then `hermes-remote approve <name> <code>`, then `her
 | `/etc/sudoers.d/agenthub-remote` | optional (the owner chooses) | Administrator commands without a password prompt |
 | Helper | `~/.local/share/agenthub-remote`, autostart at login | Runs signed jobs in the desktop session (screenshots) |
 | Power setting | optional, asked | Ignore the laptop lid and idle suspend while plugged in |
-| Packages | only if missing | `openssh-server`, `openssh-clients`, `sudo`, and one screenshot tool for the desktop |
+| Packages | only if missing | `openssh-server`, the SSH client (`openssh-clients` on Fedora, `openssh-client` on Debian), `sudo`, and one screenshot tool for the desktop |
 
 The normal SSH server on port 22 is **not** turned on. The computer's own firewall needs no change, because the computer only makes an outbound connection.
+
+**Debian and Ubuntu difference.** On those systems, installing `openssh-server` starts and enables the normal SSH server on port 22 at once. The installer blocks that: it puts a temporary `policy-rc.d` file in place while `apt-get` runs (a file that tells the package system not to start services), then removes it. It also turns off `ssh.service` and `ssh.socket` after it installed the package itself. If the computer already had `openssh-server`, the installer does not touch the computer's own SSH services. Check with `hermes-remote diag <node>`: the line `stock_ssh_port22` shows `off` when nothing listens on port 22.
+
+Another Debian difference: `sshd` will not run as root without the folder `/run/sshd`. The private service creates it itself (`RuntimeDirectory=sshd`).
 
 The name comes from the host name. Set a nickname later with `hermes-remote nickname`.
 
@@ -77,13 +83,15 @@ Then on the host: `hermes-remote revoke <name>`. OpenSSH and the screenshot tool
 - No VNC tunnel. Use `screenshot`, `run` and `gui`.
 - If the disk is encrypted (LUKS), the computer waits for the disk password after a restart and stays offline until someone enters it. `doctor` shows a note.
 - A laptop suspends on battery or with the lid closed on battery.
-- SELinux stays in its normal mode. The services run in default domains. If a connection fails with SELinux on, `diag` shows the mode and recent denials are in `journalctl -t setroubleshoot` or `ausearch -m avc`.
+- SELinux (Fedora family) and AppArmor (Debian family) stay in their normal modes. The services run in default domains. If a connection fails, `diag` shows the mode. Recent SELinux denials: `sudo ausearch -m avc -ts recent`. AppArmor denials: `sudo journalctl -k | grep -i apparmor`.
 - The installer is a plain shell script. There is no signing step.
+- On Debian and Ubuntu, the account must be in the `sudo` group. On Fedora, in the `wheel` group. If it is not, the installer says so and stops before it changes anything.
+- Ubuntu **Server** and Debian without a desktop have no screenshots and no helper. `run`, `push` and `pull` work.
 
 ## Tests
 
 ```bash
-FEDORA_ROOT=/path/to/fedora/rootfs bash tests/e2e-linux.sh
+FEDORA_ROOT=/path/to/fedora DEBIAN_ROOT=/path/to/debian UBUNTU_ROOT=/path/to/ubuntu bash tests/e2e-linux.sh
 ```
 
-`FEDORA_ROOT` is optional. It points at an unpacked Fedora image. With it, `sshd -t` also runs with Fedora's own OpenSSH.
+The three variables are optional. Each one points at an unpacked distribution image (for example from the Fedora or Docker Hub registry). With them, the test also runs that distribution's own OpenSSH for the tunnel login. Without them, those checks are skipped.

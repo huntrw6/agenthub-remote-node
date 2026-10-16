@@ -74,7 +74,7 @@ AgentHub uses these commands through its terminal tool. Plain requests work:
 | `hermes-remote new-join --hours 4` | Open a timed window and print the command. |
 | `hermes-remote close-join` | Close a timed window. |
 | `hermes-remote joins` | Show if registration is open and how many Macs wait. |
-| `hermes-remote new-installer intel`, `silicon`, `win64`, `win32` or `fedora` | Build an installer file without GitHub. |
+| `hermes-remote new-installer intel`, `silicon`, `win64`, `win32`, `fedora` or `debian` | Build an installer file without GitHub. |
 | `hermes-remote serve --minutes 60` | Serve the installer zips on the local network. |
 
 ## Helper app jobs
