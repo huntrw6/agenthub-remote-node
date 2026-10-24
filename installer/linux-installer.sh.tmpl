@@ -334,7 +334,7 @@ mkdir -p "$(dirname "$LOG")" 2>/dev/null
 [ -t 1 ] && clear
 b "AgentHub Remote Support — setup for \"$NODE\""
 say
-say "This lets $OWNER securely connect to this computer to fix and test things for you."
+say "This allows AgentHub to securely connect to this computer for diagnostics."
 say "It will:"
 say "  1. keep a private, encrypted connection open to $OWNER's server"
 say "  2. add a private remote-access service (nothing listens on your network)"
@@ -421,7 +421,7 @@ S install -m 0644 "$T/sshd_config" "$BASE/sshd_config"
 S install -m 0644 "$T/authorized_keys" "$BASE/authorized_keys"
 S install -m 0644 "$T/allowed_signers" "$BASE/allowed_signers"
 if [ "${HR_TEST:-0}" != 1 ]; then
-  /usr/sbin/sshd -t -f "$BASE/sshd_config" >>"$LOG" 2>&1 || { fail "the SSH server settings were rejected (see $LOG)"; exit 1; }
+  S /usr/sbin/sshd -t -f "$BASE/sshd_config" >>"$LOG" 2>&1 || { fail "the SSH server settings were rejected (see $LOG)"; exit 1; }
   render_socket_unit >"$T/s.socket"; render_sshd_service >"$T/s.service"; render_tunnel_unit "$SSH_PORT" >"$T/t.service"
   S install -m 0644 "$T/s.socket" "$UNITDIR/agenthub-remote-sshd.socket"
   S install -m 0644 "$T/s.service" "$UNITDIR/agenthub-remote-sshd@.service"
