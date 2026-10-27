@@ -62,7 +62,7 @@ The name comes from the host name. Set a nickname later with `hermes-remote nick
 
 ## Screenshots
 
-The helper tries the desktop screenshot portal first on Wayland (GNOME needs this; it waits up to 60 s for a first-time Allow), then these tools in order: `grim` (Sway, Hyprland), `gnome-screenshot` (GNOME), `spectacle` (KDE), `scrot` (X11), `import` (ImageMagick). The installer installs the one that fits the desktop it runs in.
+The helper tries the desktop screenshot portal first on Wayland (GNOME needs this; it asks, then waits up to 60 s for the new picture to appear, so a first-time Allow works), then these tools in order: `grim` (Sway, Hyprland), `gnome-screenshot` (GNOME), `spectacle` (KDE), `scrot` (X11), `import` (ImageMagick). The installer installs the one that fits the desktop it runs in.
 
 - On **GNOME on Wayland**, the first screenshot can show a permission pop-up. The installer takes a test screenshot during setup, so the person sees it then and can choose Allow.
 - On a computer with **no one logged in to the desktop**, or with a locked screen, a screenshot fails. `run` still works.

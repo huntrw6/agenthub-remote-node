@@ -1070,6 +1070,25 @@ def cmd_vnc(a):
 LIN_SHOT = r"""
 d=$(mktemp -d) || exit 1; f="$d/s.png"; used=""
 try() { [ -z "$used" ] && command -v "$1" >/dev/null 2>&1 || return 0; shift; "$@" >/dev/null 2>&1; if [ -s "$f" ] && [ "$(head -c4 "$f" | tail -c3)" = PNG ]; then used=1; fi; }
+# Wayland (GNOME and others): the desktop screenshot portal. GNOME Shell blocks the other tools there.
+# Waits up to 60 s so a person can click Allow on the first run; the answer is remembered afterwards.
+portal() {
+  [ "${XDG_SESSION_TYPE:-}" = wayland ] && command -v gdbus >/dev/null 2>&1 || return 0
+  local mk="$d/mark" dirs new="" i p
+  dirs="$(xdg-user-dir PICTURES 2>/dev/null) $HOME/Pictures $HOME/Pictures/Screenshots"
+  : >"$mk"; sleep 1
+  gdbus call --session --timeout 5 --dest org.freedesktop.portal.Desktop --object-path /org/freedesktop/portal/desktop --method org.freedesktop.portal.Screenshot.Screenshot "" "{'interactive': <false>}" >/dev/null 2>&1 || return 0
+  [ -n "${HR_PORTAL_NOTE:-}" ] && echo "  If a pop-up asks to allow a screenshot, choose Allow now." >&2
+  for i in $(seq 1 60); do
+    for p in $dirs; do [ -d "$p" ] && new="$(find "$p" -maxdepth 1 -name '*.png' -newer "$mk" 2>/dev/null | head -1)"; [ -n "$new" ] && break; done
+    [ -n "$new" ] && break
+    sleep 1
+  done
+  [ -n "$new" ] || return 0
+  sleep 1; cp -f "$new" "$f" 2>/dev/null; rm -f "$new"
+  if [ -s "$f" ] && [ "$(head -c4 "$f" | tail -c3)" = PNG ]; then used=1; fi
+}
+portal
 try grim grim "$f"
 try gnome-screenshot gnome-screenshot -f "$f"
 try spectacle spectacle -b -n -f -o "$f"
