@@ -297,6 +297,30 @@ screenshot_snippet() {
 cat <<'EOF'
 d=$(mktemp -d) || exit 1; f="$d/s.png"; used=""
 try() { [ -z "$used" ] && command -v "$1" >/dev/null 2>&1 || return 0; shift; "$@" >/dev/null 2>&1; if [ -s "$f" ] && [ "$(head -c4 "$f" | tail -c3)" = PNG ]; then used=1; fi; }
+# Wayland (GNOME and others): the desktop screenshot portal. GNOME Shell blocks the other tools there.
+# Waits up to 60 s so a person can click Allow on the first run; the answer is remembered afterwards.
+portal() {
+  [ "${XDG_SESSION_TYPE:-}" = wayland ] && command -v gdbus >/dev/null 2>&1 || return 0
+  local log="$d/portal.log" mp="" uri="" i
+  gdbus monitor --session --dest org.freedesktop.portal.Desktop >"$log" 2>&1 & mp=$!
+  sleep 0.5
+  if gdbus call --session --timeout 5 --dest org.freedesktop.portal.Desktop --object-path /org/freedesktop/portal/desktop --method org.freedesktop.portal.Screenshot.Screenshot "" "{'interactive': <false>}" >/dev/null 2>&1; then
+    [ -n "${HR_PORTAL_NOTE:-}" ] && echo "  If a pop-up asks to allow a screenshot, choose Allow now." >&2
+    for i in $(seq 1 60); do
+      uri="$(grep -o "file://[^']*" "$log" | head -1)"
+      [ -n "$uri" ] && break
+      grep -q "Request.Response (uint32 [1-9]" "$log" && break
+      sleep 1
+    done
+  fi
+  kill "$mp" 2>/dev/null; wait "$mp" 2>/dev/null
+  if [ -n "$uri" ]; then
+    uri="${uri#file://}"; uri="$(printf '%b' "$(printf '%s' "$uri" | sed 's/%\(..\)/\\x\1/g')")"
+    cp -f "$uri" "$f" 2>/dev/null; rm -f "$uri"
+    if [ -s "$f" ] && [ "$(head -c4 "$f" | tail -c3)" = PNG ]; then used=1; fi
+  fi
+}
+portal
 try grim grim "$f"
 try gnome-screenshot gnome-screenshot -f "$f"
 try spectacle spectacle -b -n -f -o "$f"
@@ -456,7 +480,7 @@ if [ "${HR_TEST:-0}" != 1 ]; then
     ( nohup /bin/bash "$HELPER" >>"$LOG" 2>&1 & ) ; sleep 2
     [ -s "$IPC/status.txt" ] && ok "helper is running (it also starts every time you log in)" || warn "the helper did not start (see $LOG)"
     say "  Testing a screenshot (a pop-up may ask you to allow it: choose Allow)..."
-    shot="$(screenshot_snippet | bash 2>&1)"
+    shot="$(screenshot_snippet | HR_PORTAL_NOTE=1 bash 2>&1)"
     if [ "$(printf '%s' "$shot" | head -c 12)" = "iVBORw0KGgoA" ]; then ok "screenshots work"; SHOT_RESULT=ok
     else warn "screenshots do not work yet: ${shot:0:140}"; SHOT_RESULT="failed: ${shot:0:140}"; fi
   else
