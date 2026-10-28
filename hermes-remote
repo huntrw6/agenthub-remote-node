@@ -1070,6 +1070,29 @@ def cmd_vnc(a):
 LIN_SHOT = r"""
 d=$(mktemp -d) || exit 1; f="$d/s.png"; used=""
 try() { [ -z "$used" ] && command -v "$1" >/dev/null 2>&1 || return 0; shift; "$@" >/dev/null 2>&1; if [ -s "$f" ] && [ "$(head -c4 "$f" | tail -c3)" = PNG ]; then used=1; fi; }
+# GNOME: a half-second screen recording, first frame kept. No flash, no sound, no permission prompt.
+# The recorder stops when its caller disconnects, so a small Python program holds the connection open.
+record() {
+  case "${XDG_CURRENT_DESKTOP:-}" in *GNOME*) ;; *) return 0;; esac
+  command -v ffmpeg >/dev/null 2>&1 && command -v python3 >/dev/null 2>&1 || return 0
+  cat >"$d/rec.py" <<'PYEOF'
+import os, sys, time
+import gi
+gi.require_version("Gio", "2.0")
+from gi.repository import Gio, GLib
+b = Gio.DBusConnection.new_for_address_sync(os.environ.get("DBUS_SESSION_BUS_ADDRESS") or "unix:path=/run/user/%d/bus" % os.getuid(), Gio.DBusConnectionFlags.AUTHENTICATION_CLIENT | Gio.DBusConnectionFlags.MESSAGE_BUS_CONNECTION, None, None)
+def call(m, a):
+    return b.call_sync("org.gnome.Shell.Screencast", "/org/gnome/Shell/Screencast", "org.gnome.Shell.Screencast", m, a, None, Gio.DBusCallFlags.NONE, 10000, None).unpack()
+ok, name = call("Screencast", GLib.Variant("(sa{sv})", (sys.argv[1], {"framerate": GLib.Variant("u", 10), "draw-cursor": GLib.Variant("b", False)})))
+time.sleep(0.3)
+call("StopScreencast", None)
+print(name)
+PYEOF
+  local v; v="$(timeout 15 python3 "$d/rec.py" "$d/rec" 2>/dev/null | tail -1)"
+  [ -n "$v" ] && [ -s "$v" ] && timeout 15 ffmpeg -y -loglevel error -i "$v" -frames:v 1 "$f" >/dev/null 2>&1
+  if [ -s "$f" ] && [ "$(head -c4 "$f" | tail -c3)" = PNG ]; then used=1; fi
+  rm -f "$v"
+}
 # Wayland (GNOME and others): the desktop screenshot portal. GNOME Shell blocks the other tools there.
 # Waits up to 60 s so a person can click Allow on the first run; the answer is remembered afterwards.
 portal() {
@@ -1088,7 +1111,8 @@ portal() {
   sleep 1; cp -f "$new" "$f" 2>/dev/null; rm -f "$new"
   if [ -s "$f" ] && [ "$(head -c4 "$f" | tail -c3)" = PNG ]; then used=1; fi
 }
-portal
+record
+[ -z "$used" ] && portal
 try grim grim "$f"
 try gnome-screenshot gnome-screenshot -f "$f"
 try spectacle spectacle -b -n -f -o "$f"
