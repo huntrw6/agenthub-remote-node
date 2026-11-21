@@ -464,6 +464,8 @@ S install -m 0644 "$T/sshd_config" "$BASE/sshd_config"
 S install -m 0644 "$T/authorized_keys" "$BASE/authorized_keys"
 S install -m 0644 "$T/allowed_signers" "$BASE/allowed_signers"
 if [ "${HR_TEST:-0}" != 1 ]; then
+  # sshd -t needs /run/sshd (privilege separation); it vanishes when the stock ssh service is stopped
+  S mkdir -p -m 0755 /run/sshd
   S /usr/sbin/sshd -t -f "$BASE/sshd_config" >>"$LOG" 2>&1 || { fail "the SSH server settings were rejected (see $LOG)"; exit 1; }
   render_socket_unit >"$T/s.socket"; render_sshd_service >"$T/s.service"; render_tunnel_unit "$SSH_PORT" >"$T/t.service"
   S install -m 0644 "$T/s.socket" "$UNITDIR/agenthub-remote-sshd.socket"
