@@ -18,6 +18,7 @@ janes-imac (office)  active  ONLINE  jane  x86_64  15.7.9
 | Run a shell script | `hermes-remote run --sh <node> '<script>'` | Put `--sh` and `--root` before the node. |
 | Run as root | `hermes-remote run --root <node> -- <argv>` | Mac only. Uses `sudo -n`. On Windows, commands already run with the rights of the signed-in account (an administrator on most home PCs). |
 | Look at the screen | `hermes-remote screenshot <node>` | Saves a PNG in `~/.hermes-remote/shots/` and prints the path. Windows: needs someone signed in and the screen unlocked. |
+| Watch the screen for a while | `hermes-remote record <node> --seconds 15 --every 1` | A film strip: it takes screenshots one after another and saves them as numbered PNGs in a folder (plus `recording.mp4` if `ffmpeg` is installed here). Not smooth video: each screenshot takes a second or more, so a Linux KDE computer gives about one frame every 2 seconds. Needs no extra permission. Up to 120 seconds. |
 | Do something that needs a macOS permission | `hermes-remote gui <node> -- <argv>` or `gui --sh <node> '<script>'` | Runs inside the Hermes Remote Helper app, which holds the permissions. Signed job. 90 second limit. |
 | Copy files | `hermes-remote push <node> <local> <remote>` or `pull <node> <remote> <local>` | Uses the SSH connection. |
 | Check permissions and power settings | `hermes-remote doctor <node>` | Does not cause macOS pop-ups. |
@@ -86,5 +87,5 @@ Use `gui` for anything that touches a protected resource: the screen, accessibil
 ## Rules
 
 - Do not leave a command running that waits for a macOS pop-up. Take a `screenshot` to see the pop-up.
-- Screen recording and remote desktop can mute apps that detect capture. Use `screenshot` to look at the screen.
+- Screen recording and remote desktop can mute apps that detect capture. Use `screenshot` to look at the screen. `record` is only a series of screenshots, so it does not mute anything.
 - Ask the owner before you stop, restart, or change an app that people use.

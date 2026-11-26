@@ -29,8 +29,15 @@ LOG="${HR_LOG:-$DESK_HOME/agenthub-remote-install.log}"
 IPC="$DESK_HOME/.local/share/agenthub-remote/ipc"
 HELPER="$DESK_HOME/.local/share/agenthub-remote/helper.sh"
 AUTOSTART="$DESK_HOME/.config/autostart/agenthub-remote-helper.desktop"
+# Some sessions never read XDG autostart files (Plasma Bigscreen, other TV/kiosk shells), so the helper also
+# runs as a systemd USER service that waits for the desktop and then starts it. Only one helper runs (flock).
+LAUNCHER="$DESK_HOME/.local/share/agenthub-remote/helper-launch.sh"
+USERUNIT="${HR_USERUNIT:-$DESK_HOME/.config/systemd/user/agenthub-remote-helper.service}"
 HOSTKEY="$BASE/ssh_host_ed25519_key"
 SOCK="$RUNDIR/sshd.sock"
+# The tunnel log lives under /var/log: on SELinux systems systemd may append to var_log_t files but not to /etc files.
+TUNLOG="${HR_TUNLOG:-/var/log/agenthub-remote-tunnel.log}"
+SEPOLICY="${HR_SEPOLICY:-$BASE/agenthub_remote.cil}"
 
 node_name() { printf '%s' "${HR_FAKE_HOSTNAME:-$(hostname -s 2>/dev/null || hostname)}" | tr -cd 'A-Za-z0-9 ._-'; }
 NODE="$(node_name)"; [ -n "$NODE" ] || NODE=linux-pc
@@ -124,7 +131,7 @@ ExecStart=/usr/bin/ssh -N -T -F /dev/null -i $BASE/tunnel_ed25519 -p $RELAY_PORT
   -R 127.0.0.1:$1:$SOCK $RELAY_USER@$RELAY_HOST
 Restart=always
 RestartSec=15
-StandardError=append:$BASE/tunnel.log
+StandardError=append:$TUNLOG
 NoNewPrivileges=yes
 ProtectHome=yes
 PrivateTmp=yes
@@ -155,6 +162,69 @@ X-GNOME-Autostart-enabled=true
 EOF
 }
 
+render_selinux_policy() {
+cat <<EOF
+; AgentHub Remote on SELinux (Fedora family). Systemd runs the tunnel (ssh) and the per-connection sshd, and the
+; default policy does not let it. Each rule is optional, so a policy that lacks one of the types skips only that rule.
+(optional agenthub_remote_exec
+  (allow init_t ssh_exec_t (file (getattr open read execute execute_no_trans map))))
+(optional agenthub_remote_connect
+  (allow init_t ssh_port_t (tcp_socket (name_connect))))
+(optional agenthub_remote_socket
+  (allow init_t sshd_t (unix_stream_socket (connectto))))
+(optional agenthub_remote_auth
+  (allow sshd_auth_t sshd_t (unix_stream_socket (read write))))
+(portcon tcp $RELAY_PORT (system_u object_r ssh_port_t ((s0) (s0))))
+EOF
+}
+
+setup_selinux() { # no-op unless SELinux is on and semodule exists
+  command -v getenforce >/dev/null 2>&1 && command -v semodule >/dev/null 2>&1 || return 0
+  [ "$(getenforce 2>/dev/null)" = Disabled ] && return 0
+  local t; t="$(mktemp -d)"; render_selinux_policy >"$t/p.cil"
+  S install -m 0644 "$t/p.cil" "$SEPOLICY"; rm -rf "$t"
+  if S semodule -i "$SEPOLICY" >>"$LOG" 2>&1; then ok "SELinux rules installed for the tunnel (mode: $(getenforce))"
+  else warn "could not install the SELinux rules (see $LOG); the tunnel may be blocked while SELinux is $(getenforce)"; fi
+}
+
+render_helper_launcher() {
+cat <<'EOF'
+#!/bin/bash
+# Waits (up to 10 minutes) until a desktop session is up, then runs the helper in it. The screen's address comes from
+# the systemd user environment when the session set it; otherwise from the Wayland socket and X display that exist.
+export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
+find_wayland() { local f; for f in "$XDG_RUNTIME_DIR"/wayland-[0-9]*; do [ -S "$f" ] && { basename "$f"; return 0; }; done; return 1; }
+for i in $(seq 1 300); do
+  env_="$(systemctl --user show-environment 2>/dev/null)"
+  case "$env_" in *WAYLAND_DISPLAY=*|*$'\nDISPLAY='*) break;; esac
+  find_wayland >/dev/null && break
+  sleep 2
+done
+for v in WAYLAND_DISPLAY DISPLAY XDG_SESSION_TYPE XDG_CURRENT_DESKTOP XDG_DATA_DIRS DBUS_SESSION_BUS_ADDRESS XAUTHORITY; do
+  line="$(printf '%s\n' "$env_" | grep "^$v=" | head -1)"
+  [ -n "$line" ] && export "$line"
+done
+if [ -z "${WAYLAND_DISPLAY:-}" ]; then w="$(find_wayland)" && export WAYLAND_DISPLAY="$w" XDG_SESSION_TYPE=wayland; fi
+if [ -z "${DISPLAY:-}" ]; then x="$(ls /tmp/.X11-unix 2>/dev/null | sed -n 's/^X\([0-9][0-9]*\)$/\1/p' | head -1)"; [ -n "$x" ] && export DISPLAY=":$x"; fi
+exec /bin/bash "$HOME/.local/share/agenthub-remote/helper.sh"
+EOF
+}
+
+render_helper_user_unit() {
+cat <<EOF
+[Unit]
+Description=AgentHub Remote helper (screenshots and desktop tasks for remote support)
+
+[Service]
+ExecStart=/bin/bash $LAUNCHER
+Restart=on-failure
+RestartSec=20
+
+[Install]
+WantedBy=default.target
+EOF
+}
+
 render_uninstall() {
 cat <<EOF
 #!/bin/bash
@@ -166,10 +236,14 @@ rm -f $UNITDIR/agenthub-remote-tunnel.service $UNITDIR/agenthub-remote-sshd.sock
 systemctl daemon-reload 2>/dev/null
 rm -f $SUDOERS_FILE $LOGIND_FILE
 systemctl restart systemd-logind 2>/dev/null
+sudo -u $DESK_USER env XDG_RUNTIME_DIR=/run/user/$(id -u $DESK_USER) systemctl --user disable --now agenthub-remote-helper.service 2>/dev/null
+rm -f $USERUNIT
 pkill -u $DESK_USER -f 'agenthub-remote/helper.sh' 2>/dev/null
 rm -f $AUTOSTART
 rm -rf $DESK_HOME/.local/share/agenthub-remote
 userdel $SVC_USER 2>/dev/null
+command -v semodule >/dev/null 2>&1 && semodule -r agenthub_remote 2>/dev/null
+rm -f $TUNLOG
 rm -rf $BASE $RUNDIR
 echo "AgentHub Remote Support removed. OpenSSH and the screenshot tool were left installed."
 EOF
@@ -366,7 +440,7 @@ send_diag() {
   d="$(printf 'time=%s\nos=%s arch=%s\nselftest=%s\nsocket: %s\ntunnel: %s\ntunnel.log:\n%s\nsession=%s desktop=%s\nselinux=%s apparmor=%s\nstock_ssh_port22=%s\n' \
     "$(date '+%F %T')" "$(. /etc/os-release 2>/dev/null; echo "${PRETTY_NAME:-?}")" "$(uname -m)" "${SELFTEST:-n/a}" \
     "$(systemctl is-active agenthub-remote-sshd.socket 2>&1)" "$(systemctl is-active agenthub-remote-tunnel.service 2>&1)" \
-    "$(tail -8 "$BASE/tunnel.log" 2>/dev/null)" "${XDG_SESSION_TYPE:-?}" "${XDG_CURRENT_DESKTOP:-?}" "$(getenforce 2>/dev/null || echo n/a)" "$(cat /sys/module/apparmor/parameters/enabled 2>/dev/null || echo n/a)" "$( (exec 3<>/dev/tcp/127.0.0.1/22) 2>/dev/null && echo listening || echo off)")"
+    "$(tail -8 "$TUNLOG" 2>/dev/null)" "${XDG_SESSION_TYPE:-?}" "${XDG_CURRENT_DESKTOP:-?}" "$(getenforce 2>/dev/null || echo n/a)" "$(cat /sys/module/apparmor/parameters/enabled 2>/dev/null || echo n/a)" "$( (exec 3<>/dev/tcp/127.0.0.1/22) 2>/dev/null && echo listening || echo off)")"
   HR_DIAG_TEXT="$d" enroll >/dev/null 2>&1
 }
 
@@ -398,11 +472,12 @@ pause
 
 b "Step 1/7 — Administrator password"
 if [ "${HR_TEST:-0}" != 1 ]; then
-  say "Terminal will ask for your login password (you won't see it as you type)."
+  say "If asked, type your login password (you won't see it as you type)."
   if ! have_cmd sudo; then
     fail "This computer has no 'sudo' command yet. Open a terminal and run:  su -  then:  apt-get install sudo && usermod -aG sudo $DESK_USER  (Debian family)  or  dnf install sudo && usermod -aG wheel $DESK_USER  (Fedora family). Then log out, log in, and run this again."; exit 1
   fi
-  S -v || { fail "Your account ($DESK_USER) is not allowed to make administrator changes. Ask the owner of this computer to add you to the 'sudo' group (Debian family) or the 'wheel' group (Fedora family), then run this again."; exit 1; }
+  # an account that already has passwordless sudo is not asked for a password (sudo -v would still ask)
+  { S -n true 2>/dev/null || S -v; } || { fail "Your account ($DESK_USER) is not allowed to make administrator changes. Ask the owner of this computer to add you to the 'sudo' group (Debian family) or the 'wheel' group (Fedora family), then run this again."; exit 1; }
   ( while true; do S -n true 2>/dev/null; sleep 50; kill -0 "$$" 2>/dev/null || exit; done ) &
   KEEP=$!; trap 'kill $KEEP 2>/dev/null' EXIT
 fi
@@ -471,12 +546,11 @@ if [ "${HR_TEST:-0}" != 1 ]; then
   S install -m 0644 "$T/s.socket" "$UNITDIR/agenthub-remote-sshd.socket"
   S install -m 0644 "$T/s.service" "$UNITDIR/agenthub-remote-sshd@.service"
   S install -m 0644 "$T/t.service" "$UNITDIR/agenthub-remote-tunnel.service"
-  touch "$BASE/tunnel.log" 2>/dev/null || S touch "$BASE/tunnel.log"; own "$SVC_USER:$SVC_USER" "$BASE/tunnel.log"
+  S touch "$TUNLOG"; own "$SVC_USER:$SVC_USER" "$TUNLOG"; S chmod 0644 "$TUNLOG"; command -v restorecon >/dev/null 2>&1 && S restorecon "$TUNLOG" >/dev/null 2>&1
+  setup_selinux
   sysctl_ daemon-reload
   sysctl_ enable --now agenthub-remote-sshd.socket >>"$LOG" 2>&1 && ok "private SSH socket is on (starts with the computer)" || warn "the SSH socket did not start (see $LOG)"
   sysctl_ enable --now agenthub-remote-tunnel.service >>"$LOG" 2>&1 && ok "tunnel service is on (starts with the computer)" || warn "the tunnel did not start (see $LOG)"
-  # SELinux: units run in default domains; report the mode to the owner through the diagnostics
-  command -v getenforce >/dev/null 2>&1 && say "  SELinux: $(getenforce)"
 fi
 case "$SUDO_MODE" in
   yes) DO_SUDO=1;;
@@ -496,6 +570,12 @@ b "Step 6/7 — Helper for your desktop"
 mkdir -p "$IPC/jobs" "$(dirname "$AUTOSTART")"; chmod 700 "$DESK_HOME/.local/share/agenthub-remote" "$IPC" "$IPC/jobs" 2>/dev/null
 printf '%s' "$HELPER_B64" | base64 --decode >"$HELPER"; chmod 700 "$HELPER"
 render_autostart >"$AUTOSTART"
+render_helper_launcher >"$LAUNCHER"; chmod 700 "$LAUNCHER"
+mkdir -p "$(dirname "$USERUNIT")"; render_helper_user_unit >"$USERUNIT"
+if [ "${HR_TEST:-0}" != 1 ] && [ -z "${HR_NO_SYSTEMD:-}" ]; then
+  systemctl --user daemon-reload >>"$LOG" 2>&1; systemctl --user enable --now agenthub-remote-helper.service >>"$LOG" 2>&1 \
+    && ok "helper service is on (starts with your desktop session)" || warn "could not enable the helper service; the autostart entry is still in place (see $LOG)"
+fi
 if [ "${HR_TEST:-0}" != 1 ]; then
   if [ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ]; then
     ( nohup /bin/bash "$HELPER" >>"$LOG" 2>&1 & ) ; sleep 2

@@ -1,6 +1,6 @@
 # Linux nodes
 
-Status: **written and tested without a real Fedora, Debian or Ubuntu computer.** What was tested:
+Status: **tested on one real computer: Fedora 45 KDE Plasma (SELinux Enforcing), Intel NUC.** Debian and Ubuntu are still tested only in images. What was tested without a real system:
 
 - The installer logic, the join flow and the registration, on a test relay.
 - Every file the installer writes, checked with real tools: `bash -n`, `visudo -c`, `systemd-analyze verify`, and `sshd -t`.
@@ -8,7 +8,7 @@ Status: **written and tested without a real Fedora, Debian or Ubuntu computer.**
 - The Debian and Ubuntu package scripts, run for real in their images: what `apt install openssh-server` enables, which files it makes, and the `/run/sshd` directory that `sshd` needs.
 - The helper and the signed jobs.
 
-Not tested, because they need a real system: `dnf install` and `apt install` on a live computer, `systemctl enable`, the `useradd` step, SELinux and AppArmor, and a screenshot in a real desktop session. **Test on one computer of each family that you own before you give the command to anyone.**
+Checked on the real Fedora 45 KDE computer: the whole install, the SELinux rules, the tunnel, the private sshd, the helper, `doctor`, `screenshot` and `record`. Not yet checked on a real computer: Debian and Ubuntu (`apt install`, AppArmor), and GNOME on Fedora. **Test on one computer of each family that you own before you give the command to anyone.**
 
 ## Supported
 
@@ -83,7 +83,10 @@ Then on the host: `hermes-remote revoke <name>`. OpenSSH and the screenshot tool
 - No VNC tunnel. Use `screenshot`, `run` and `gui`.
 - If the disk is encrypted (LUKS), the computer waits for the disk password after a restart and stays offline until someone enters it. `doctor` shows a note.
 - A laptop suspends on battery or with the lid closed on battery.
-- SELinux (Fedora family) and AppArmor (Debian family) stay in their normal modes. The services run in default domains. If a connection fails, `diag` shows the mode. Recent SELinux denials: `sudo ausearch -m avc -ts recent`. AppArmor denials: `sudo journalctl -k | grep -i apparmor`.
+- SELinux (Fedora family) stays in its normal mode. On Fedora 45 the default policy blocks systemd from running `ssh` for the tunnel, from connecting to the relay port, and from handing the private sshd its socket. The installer therefore installs a small SELinux module (`agenthub_remote`, from `/etc/agenthub-remote/agenthub_remote.cil`) that allows exactly those four things, and labels the relay port as an SSH port. Each rule is optional, so a policy without one of the types skips only that rule. `doctor` shows `SELinux rules for the tunnel installed`. The uninstaller removes the module. The tunnel log is `/var/log/agenthub-remote-tunnel.log` (systemd may append there; it may not append to files in `/etc`). Recent SELinux denials: `sudo ausearch -m avc -ts recent` or `sudo journalctl | grep 'avc:  denied'`. AppArmor (Debian family) stays in its normal mode; denials: `sudo journalctl -k | grep -i apparmor`.
+- **The helper also runs as a systemd user service** (`agenthub-remote-helper.service`). Some sessions never read XDG autostart files, for example Plasma Bigscreen (a TV shell), so the autostart entry alone leaves the helper off there. The service waits for the desktop, takes the screen address from the systemd user environment or from the Wayland socket and X display that exist, and starts the helper. Only one helper runs.
+- **Screenshots on KDE** use `spectacle` first (about 2 seconds). The desktop portal is slower and can show an "Allow Apps to Take Screenshots?" pop-up, so it is only the fallback.
+- **A computer that already has passwordless sudo** is not asked for a password at step 1.
 - The installer is a plain shell script. There is no signing step.
 - On Debian and Ubuntu, the account must be in the `sudo` group. On Fedora, in the `wheel` group. If it is not, the installer says so and stops before it changes anything.
 - Ubuntu **Server** and Debian without a desktop have no screenshots and no helper. `run`, `push` and `pull` work.

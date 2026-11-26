@@ -20,6 +20,7 @@ import json
 import os
 import re
 import shlex
+import shutil
 import signal
 import socket
 import subprocess
@@ -1010,24 +1011,61 @@ def cmd_gui(a):
     sys.exit(rc)
 
 
-def cmd_screenshot(a):
-    out = HOME / "shots"
-    out.mkdir(mode=0o700, exist_ok=True)
-    dest = out / f"{a.name}-{dt.datetime.now().strftime('%Y%m%d-%H%M%S')}.png"
-    if is_win(node(a.name)):
-        rc, o = app_job(a.name, WIN_SHOT, 60)
-    elif node(a.name).get("platform") == "linux":
-        rc, o = app_job(a.name, LIN_SHOT, 60)
+def grab_png(name: str) -> bytes:
+    """One screenshot of a node's screen as PNG bytes (dies with a clear message on failure)."""
+    if is_win(node(name)):
+        rc, o = app_job(name, WIN_SHOT, 60)
+    elif node(name).get("platform") == "linux":
+        rc, o = app_job(name, LIN_SHOT, 60)
     else:
-        rc, o = app_job(a.name, 't=$(mktemp /tmp/hr.XXXXXX); /usr/sbin/screencapture -x -t png "$t" && /usr/bin/base64 < "$t"; rm -f "$t"', 60)
+        rc, o = app_job(name, 't=$(mktemp /tmp/hr.XXXXXX); /usr/sbin/screencapture -x -t png "$t" && /usr/bin/base64 < "$t"; rm -f "$t"', 60)
     try:
         data = base64.b64decode("".join(o.split()), validate=False)
     except Exception:  # noqa: BLE001
         data = b""
     if rc or not data.startswith(b"\x89PNG"):
-        die("screenshot failed: " + o.strip()[:300] + (" (is someone signed in and is the screen unlocked? run doctor)" if node(a.name).get("platform") in ("windows", "linux") else " (Screen Recording allowed for the helper? run doctor)"))
-    dest.write_bytes(data)
+        die("screenshot failed: " + o.strip()[:300] + (" (is someone signed in and is the screen unlocked? run doctor)" if node(name).get("platform") in ("windows", "linux") else " (Screen Recording allowed for the helper? run doctor)"))
+    return data
+
+
+def cmd_screenshot(a):
+    out = HOME / "shots"
+    out.mkdir(mode=0o700, exist_ok=True)
+    dest = out / f"{a.name}-{dt.datetime.now().strftime('%Y%m%d-%H%M%S')}.png"
+    dest.write_bytes(grab_png(a.name))
     print(dest)
+
+
+def cmd_record(a):
+    """A screen recording as a timed series of screenshots (default 1 per second), saved as numbered PNGs and, when
+    ffmpeg is on this computer, one MP4. It needs no extra permission: it uses the same helper as `screenshot`.
+    It is a film strip, not smooth video (each screenshot takes a few seconds, so frames can be further apart than --every)."""
+    import time
+    node(a.name)
+    seconds = max(2, min(int(a.seconds), 120))
+    every = max(1.0, min(float(a.every), 30.0))
+    folder = HOME / "shots" / f"{a.name}-rec-{dt.datetime.now().strftime('%Y%m%d-%H%M%S')}"
+    folder.mkdir(mode=0o700, parents=True)
+    end = time.monotonic() + seconds
+    count = 0
+    while True:
+        t0 = time.monotonic()
+        count += 1
+        (folder / f"frame-{count:04d}.png").write_bytes(grab_png(a.name))
+        if time.monotonic() >= end:
+            break
+        time.sleep(max(0.0, every - (time.monotonic() - t0)))
+    print(f"{count} frames: {folder}")
+    ff = shutil.which("ffmpeg")
+    if ff and count > 1:
+        mp4 = folder / "recording.mp4"
+        r = subprocess.run([ff, "-y", "-loglevel", "error", "-framerate", f"{1 / every:.4f}", "-i", str(folder / "frame-%04d.png"),
+                            "-vf", "scale=trunc(iw/2)*2:trunc(ih/2)*2", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-r", "10", str(mp4)],
+                           capture_output=True)
+        if r.returncode == 0 and mp4.exists():
+            print(mp4)
+        else:
+            print("(ffmpeg could not make an MP4; the frames are in the folder)")
 
 
 def cmd_push(a):
@@ -1111,7 +1149,9 @@ portal() {
   sleep 1; cp -f "$new" "$f" 2>/dev/null; rm -f "$new"
   if [ -s "$f" ] && [ "$(head -c4 "$f" | tail -c3)" = PNG ]; then used=1; fi
 }
-record
+# KDE: spectacle is allowed to capture directly and is fast (the portal takes several seconds)
+case "${XDG_CURRENT_DESKTOP:-}" in *KDE*) try spectacle spectacle -b -n -f -o "$f";; esac
+[ -z "$used" ] && record
 [ -z "$used" ] && portal
 try grim grim "$f"
 try gnome-screenshot gnome-screenshot -f "$f"
@@ -1133,6 +1173,8 @@ st="$HOME/.local/share/agenthub-remote/ipc/status.txt"
 if [ -f "$st" ]; then age=$(( $(date +%s) - $(stat -c %Y "$st") )); if [ "$age" -lt 120 ]; then echo "OK    helper alive (status $age s old)"; else echo "MISSING helper (status $age s old: nobody is logged in to the desktop, or it stopped)"; fi; else echo "MISSING helper (never started)"; fi
 for tool in grim gnome-screenshot spectacle scrot import; do command -v $tool >/dev/null 2>&1 && echo "tool   $tool"; done
 echo "selinux=$(getenforce 2>/dev/null || echo n/a)"
+if command -v getenforce >/dev/null 2>&1 && [ "$(getenforce 2>/dev/null)" != Disabled ]; then t "SELinux rules for the tunnel installed" 'sudo -n semodule -l | grep -q ^agenthub_remote'; fi
+
 lsblk -rno TYPE 2>/dev/null | grep -q crypt && echo "NOTE  encrypted disk (LUKS): after a restart or power loss the computer waits at the disk-password screen and stays offline until it is entered"
 ls /sys/class/power_supply/BAT* >/dev/null 2>&1 && echo "NOTE  laptop: it suspends on battery or when the lid closes unless it is plugged in"
 echo "lid_on_power=$(systemd-analyze cat-config systemd/logind.conf 2>/dev/null | sed -n 's/^HandleLidSwitchExternalPower=//p' | tail -1)"
@@ -1259,6 +1301,8 @@ def main():
     s = sp.add_parser("shell"); s.add_argument("name"); s.set_defaults(f=cmd_shell)
     s = sp.add_parser("gui", help="run a command INSIDE the helper app (has Screen Recording/Accessibility/LAN/Files permissions)"); s.add_argument("name"); s.add_argument("--sh", action="store_true"); s.add_argument("--timeout", type=int, default=60); s.add_argument("argv", nargs=argparse.REMAINDER); s.set_defaults(f=cmd_gui)
     s = sp.add_parser("screenshot"); s.add_argument("name"); s.set_defaults(f=cmd_screenshot)
+    s = sp.add_parser("record", help="screen recording as a timed series of screenshots (+ MP4 if ffmpeg is installed)")
+    s.add_argument("name"); s.add_argument("--seconds", type=int, default=10); s.add_argument("--every", type=float, default=1.0); s.set_defaults(f=cmd_record)
     s = sp.add_parser("push"); s.add_argument("name"); s.add_argument("local"); s.add_argument("remote"); s.set_defaults(f=cmd_push, direction="push")
     s = sp.add_parser("pull"); s.add_argument("name"); s.add_argument("remote"); s.add_argument("local"); s.set_defaults(f=cmd_push, direction="pull")
     s = sp.add_parser("vnc"); s.add_argument("name"); s.set_defaults(f=cmd_vnc)
