@@ -12,6 +12,8 @@
 #   4. adds a helper that runs in your desktop session (for screenshots and desktop tasks)
 # Remove everything later with:  sudo /etc/agenthub-remote/uninstall.sh
 set -u
+# visudo, sshd and friends live in /usr/sbin or /sbin, which a normal user's PATH often lacks (Debian/Proxmox: "visudo: command not found" made the sudo step fail).
+PATH="$PATH:/usr/local/sbin:/usr/sbin:/sbin"; export PATH
 #@@CONFIG@@
 # the block above sets: OWNER RELAY_HOST RELAY_PORT RELAY_USER RELAY_HOSTKEY HERMES_PUB SUDO_MODE
 #                       ENROLL_KEY_B64 HELPER_B64 GENERATED EXPIRES JOIN_MODE TYPE
